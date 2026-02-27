@@ -1,7 +1,7 @@
 import marimo
 
 __generated_with = "0.19.6"
-app = marimo.App(width="medium")
+app = marimo.App(width="full")
 
 
 @app.cell
@@ -12,1282 +12,887 @@ def _():
     from datetime import datetime
     import pandas as pd
     import altair as alt
-    import matplotlib.pyplot as plt
     import networkx as nx
     from collections import Counter
-    return Counter, alt, datetime, json_graph, json_lib, mo, nx, pd, plt
-
-
-@app.cell
-def _(json_lib, mo, pd):
-    with open("data/MC3_schema.json", "r") as f:
-        schema = json_lib.load(f)
-
-    rows = []
-    for node_type, node_info in schema["schema"]["nodes"].items():
-        for sub_type, details in node_info["sub_types"].items():
-            row = {
-                "type": node_type,
-                "sub_type": sub_type,
-                "description": details.get("description", ""),
-                "count": details.get("count", ""),
-            }
-            rows.append(row)
-
-    df_schema = pd.DataFrame(rows)
-    mo.ui.table(df_schema)
-    return
+    import time
+    return alt, datetime, json_graph, json_lib, mo, pd
 
 
 @app.cell
 def _(json_graph, json_lib):
-    # Load graph
-    with open("data/MC3_graph.json", "r") as g:
-        json_data = json_lib.load(g)
-
-    G = json_graph.node_link_graph(json_data, edges="edges")
-
-    # Look at a few Communication nodes
-    for node, attrs in G.nodes(data=True):
-        if attrs.get("sub_type") == "Communication":
-            print(node, attrs)
-            break  # just one to start
+    with open("data/MC3_graph.json", "r") as _f:
+        _json_data = json_lib.load(_f)
+    G = json_graph.node_link_graph(_json_data, edges="edges")
     return (G,)
 
 
 @app.cell
 def _(G, datetime, pd):
-    comms = []
-    for n, a in G.nodes(data=True):
-        if a.get("sub_type") == "Communication":
-            ts = datetime.strptime(a["timestamp"], "%Y-%m-%d %H:%M:%S")
-            comms.append({
-                "node_id": n,
-                "timestamp": ts,
-                "hour": ts.hour,
-                "date": ts.date(),
-                "day_of_week": ts.strftime("%A"),
-                "content": a.get("content", ""),
+    _comms = []
+    for _n, _a in G.nodes(data=True):
+        if _a.get("sub_type") == "Communication":
+            _ts = datetime.strptime(_a["timestamp"], "%Y-%m-%d %H:%M:%S")
+            _comms.append({
+                "node_id": _n,
+                "timestamp": _ts,
+                "hour": _ts.hour,
+                "date": _ts.date(),
+                "content": _a.get("content", ""),
             })
-
-    df_comms = pd.DataFrame(comms)
-    df_comms
+    df_comms = pd.DataFrame(_comms)
     return (df_comms,)
 
 
 @app.cell
-def _(df_comms):
-    df_comms['timestamp'].max()
-    return
-
-
-@app.cell
-def _(alt, df_comms):
-    chart_hourly = alt.Chart(df_comms).mark_bar().encode(
-        x=alt.X("hour:O", title="Hour of Day"),
-        y=alt.Y("count()", title="Number of Messages"),
-    ).properties(
-        title="Messages by Hour of Day",
-        width=600,
-        height=300
-    )
-
-    chart_hourly
-    return
-
-
-@app.cell
-def _(G, df_comms, mo):
-    # Pick the first communication node
-    first_comm = df_comms["node_id"].iloc[0]
-
-    # Get all edges connected to this node (both in and out)
-    in_edges = [(u, G.edges[u, first_comm]) for u in G.predecessors(first_comm)]
-    out_edges = [(v, G.edges[first_comm, v]) for v in G.successors(first_comm)]
-
-    mo.md(f"""
-    ### Communication Node: `{first_comm}`
-
-    **Content:** {G.nodes[first_comm].get('content', '')}
-
-    **Timestamp:** {G.nodes[first_comm].get('timestamp', '')}
-
-    **Incoming edges (who sends to this node):**
-    {in_edges}
-
-    **Outgoing edges (where this node points to):**
-    {out_edges}
-    """)
-    return (first_comm,)
-
-
-@app.cell
-def _(G, first_comm, nx, plt):
-    # Build a subgraph of this node and its neighbors
-    neighbors = list(G.predecessors(first_comm)) + list(G.successors(first_comm))
-    sub_nodes = [first_comm] + neighbors
-    subgraph = G.subgraph(sub_nodes)
-
-    # Color nodes by type
-    color_map = {
-        "Entity": "#FF8C8C",
-        "Event": "#5B9BD5",
-        "Relationship": "#FFB347",
-    }
-    colors = [color_map.get(subgraph.nodes[n].get("type", ""), "gray") for n in subgraph.nodes]
-
-    # Labels: use name or label
-    labels = {n: subgraph.nodes[n].get("name", subgraph.nodes[n].get("label", n)) for n in subgraph.nodes}
-
-    # Edge labels
-    edge_labels = {(u, v): d.get("type", "") for u, v, d in subgraph.edges(data=True)}
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    pos = nx.spring_layout(subgraph, seed=42, k=1)
-    nx.draw(subgraph, pos, ax=ax, with_labels=True, labels=labels,
-            node_color=colors, node_size=500, font_size=9, arrows=True)
-    nx.draw_networkx_edge_labels(subgraph, pos, edge_labels=edge_labels, ax=ax,
-                                  font_size=8, label_pos=0.3)
-    ax.set_title(f"Neighborhood of {first_comm}")
-    plt.tight_layout()
-    fig
-    return
-
-
-@app.cell
-def _(df_comms, mo):
-    comm_slider = mo.ui.slider(
-        start=0,
-        stop=len(df_comms) - 1,
-        step=1,
-        value=0,
-        label="Communication index"
-    )
-    comm_number = mo.ui.number(
-        start=0,
-        stop=len(df_comms) - 1,
-        step=1,
-        value=0,
-        label="Or type index:"
-    )
-    return (comm_number,)
-
-
-@app.cell
-def _(G, comm_number, df_comms, mo, nx, plt):
-    idx = comm_number.value
-    selected_comm = df_comms["node_id"].iloc[idx]
-
-    # Build subgraph
-    nbrs = list(G.predecessors(selected_comm)) + list(G.successors(selected_comm))
-    sub = G.subgraph([selected_comm] + nbrs)
-
-    # Colors
-    cmap = {"Entity": "#FF8C8C", "Event": "#5B9BD5", "Relationship": "#FFB347"}
-    node_colors = [cmap.get(sub.nodes[nd].get("type", ""), "gray") for nd in sub.nodes]
-
-    # Labels
-    node_labels = {nd: sub.nodes[nd].get("name", sub.nodes[nd].get("label", nd)) for nd in sub.nodes}
-
-    # Edge labels
-    e_labels = {}
-    for u, v, d in sub.edges(data=True):
-        if d.get("type"):
-            e_labels[(u, v)] = d["type"]
-        elif sub.nodes[u].get("type") == "Entity" and sub.nodes[v].get("type") == "Event":
-            e_labels[(u, v)] = "participates_in"
-        else:
-            e_labels[(u, v)] = ""
-
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    layout = nx.spring_layout(sub, seed=42, k=2)
-    nx.draw(sub, layout, ax=ax2, with_labels=True, labels=node_labels,
-            node_color=node_colors, node_size=1500, font_size=9, arrows=True)
-    nx.draw_networkx_edge_labels(sub, layout, edge_labels=e_labels, ax=ax2,
-                                  font_size=8, label_pos=0.3)
-    ax2.set_title(f"[{idx}] {selected_comm} — {G.nodes[selected_comm].get('timestamp', '')}")
-    plt.tight_layout()
-
-    mo.vstack([
-        fig2,
-        mo.md(f"**Content:** {G.nodes[selected_comm].get('content', '')}"),
-        comm_number
-    ])
-    return
-
-
-@app.cell
-def _(df_comms, mo):
-    unique_dates = sorted(df_comms["date"].unique())
-
-    day_slider = mo.ui.slider(
-        start=0,
-        stop=len(unique_dates) - 1,
-        step=1,
-        value=0,
-        label="Day",
-        full_width=True,
-        show_value=True
-    )
-
-    hour_slider = mo.ui.slider(
-        start=8,
-        stop=14,
-        step=1,
-        value=8,
-        label="Hour",
-        full_width=True,
-        show_value=True
-    )
-
-    mo.vstack([day_slider, hour_slider])
-    return day_slider, hour_slider, unique_dates
-
-
-@app.cell
-def _(Counter, G, df_comms, nx):
-    # Build the full person-to-person graph across ALL communications
-    all_edges = Counter()
-    for c_id in df_comms["node_id"]:
-        snd = [u for u in G.predecessors(c_id) if G.nodes[u].get("type") == "Entity"]
-        rcv = [v for v in G.successors(c_id) if G.nodes[v].get("type") == "Entity"]
-        for sn in snd:
-            for rn in rcv:
-                sn_name = G.nodes[sn].get("name", sn)
-                rn_name = G.nodes[rn].get("name", rn)
-                all_edges[(sn_name, rn_name)] += 1
-
-    full_P = nx.DiGraph()
-    for (sn, rn), cnt in all_edges.items():
-        full_P.add_edge(sn, rn, weight=cnt)
-
-    fixed_pos = nx.spring_layout(full_P, seed=42, k=3)
-    return fixed_pos, full_P
-
-
-@app.cell
-def _(
-    Counter,
-    G,
-    day_slider,
-    df_comms,
-    fixed_pos,
-    full_P,
-    hour_slider,
-    mo,
-    nx,
-    plt,
-    unique_dates,
-):
-    selected_date = unique_dates[day_slider.value]
-    selected_hour = hour_slider.value
-
-    filtered2 = df_comms[(df_comms["date"] == selected_date) & (df_comms["hour"] == selected_hour)]
-
-    edge_counts = Counter()
-    for cid in filtered2["node_id"]:
-        s_list = [u for u in G.predecessors(cid) if G.nodes[u].get("type") == "Entity"]
-        r_list = [v for v in G.successors(cid) if G.nodes[v].get("type") == "Entity"]
-        for s in s_list:
-            for r in r_list:
-                s_name = G.nodes[s].get("name", s)
-                r_name = G.nodes[r].get("name", r)
-                edge_counts[(s_name, r_name)] += 1
-
-    fig4, ax4 = plt.subplots(figsize=(12, 8))
-
-    # Always draw all nodes in fixed positions
-    nx.draw_networkx_nodes(full_P, fixed_pos, ax=ax4,
-                            node_color="#FF8C8C", node_size=1200, alpha=0.3)
-    nx.draw_networkx_labels(full_P, fixed_pos, ax=ax4, font_size=8, alpha=0.4)
-
-    # Draw active edges on top
-    if len(edge_counts) > 0:
-        active_P = nx.DiGraph()
-        for (s, r), count in edge_counts.items():
-            active_P.add_edge(s, r, weight=count)
-
-        active_nodes = set(active_P.nodes)
-        nx.draw_networkx_nodes(full_P, fixed_pos, ax=ax4,
-                                nodelist=[n for n in full_P.nodes if n in active_nodes],
-                                node_color="#FF8C8C", node_size=1200, alpha=1.0)
-        nx.draw_networkx_labels(full_P, fixed_pos, ax=ax4,
-                                 labels={n: n for n in active_nodes}, font_size=8, alpha=1.0)
-
-        weights4 = [active_P.edges[e]["weight"] * 2 for e in active_P.edges]
-        nx.draw_networkx_edges(active_P, fixed_pos, ax=ax4,
-                                width=weights4, edge_color="#5B9BD5", arrows=True)
-        el4 = {(u, v): d["weight"] for u, v, d in active_P.edges(data=True)}
-        nx.draw_networkx_edge_labels(active_P, fixed_pos, edge_labels=el4, ax=ax4, font_size=8, label_pos = 0.3)
-
-    ax4.set_title(f"{selected_date} — Hour {selected_hour}:00  |  {len(filtered2)} messages")
-    plt.tight_layout()
-
-    mo.vstack([
-        fig4,
-        mo.md(f"**Date:** {selected_date}  |  **Hour:** {selected_hour}:00  |  **Messages:** {len(filtered2)}"),
-        day_slider,
-        hour_slider
-    ])
-    return
-
-
-@app.cell
-def _(
-    Counter,
-    G,
-    day_slider,
-    df_comms,
-    fixed_pos,
-    full_P,
-    hour_slider,
-    json_lib,
-    unique_dates,
-):
-    selected_date2 = unique_dates[day_slider.value]
-    selected_hour2 = hour_slider.value
-
-    filtered3 = df_comms[(df_comms["date"] == selected_date2) & (df_comms["hour"] == selected_hour2)]
-
-    edge_counts2 = Counter()
-    for c in filtered3["node_id"]:
-        sd = [u for u in G.predecessors(c) if G.nodes[u].get("type") == "Entity"]
-        rv = [v for v in G.successors(c) if G.nodes[v].get("type") == "Entity"]
-        for p1 in sd:
-            for p2 in rv:
-                p1_name = G.nodes[p1].get("name", p1)
-                p2_name = G.nodes[p2].get("name", p2)
-                edge_counts2[(p1_name, p2_name)] += 1
-
-    nodes_data = [
-        {"id": node, "x": fixed_pos[node][0], "y": fixed_pos[node][1]}
-        for node in full_P.nodes
-    ]
-
-    active_set = set()
-    for (p1, p2) in edge_counts2:
-        active_set.add(p1)
-        active_set.add(p2)
-
-    edges_data = [
-        {"source": p1, "target": p2, "weight": w}
-        for (p1, p2), w in edge_counts2.items()
-    ]
-
-    nodes_json = json_lib.dumps(nodes_data)
-    edges_json = json_lib.dumps(edges_data)
-    active_json = json_lib.dumps(list(active_set))
-    return (
-        active_json,
-        edges_json,
-        filtered3,
-        nodes_json,
-        selected_date2,
-        selected_hour2,
-    )
-
-
-@app.cell
-def _(
-    active_json,
-    day_slider,
-    edges_json,
-    filtered3,
-    hour_slider,
-    mo,
-    nodes_json,
-    selected_date2,
-    selected_hour2,
-):
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://d3js.org/d3.v7.min.js"></script>
-    </head>
-    <body style="margin:0;">
-    <svg id="graph" width="900" height="600"></svg>
-    <script>
-        const nodes = {nodes_json};
-        const edges = {edges_json};
-        const activeSet = new Set({active_json});
-
-        const width = 900;
-        const height = 600;
-
-        const svg = d3.select("#graph");
-
-        const xScale = d3.scaleLinear()
-            .domain(d3.extent(nodes, d => d.x))
-            .range([80, width - 80]);
-        const yScale = d3.scaleLinear()
-            .domain(d3.extent(nodes, d => d.y))
-            .range([80, height - 80]);
-
-        svg.append("defs").append("marker")
-            .attr("id", "arrow")
-            .attr("viewBox", "0 0 10 10")
-            .attr("refX", 8)
-            .attr("refY", 5)
-            .attr("markerWidth", 6)
-            .attr("markerHeight", 6)
-            .attr("orient", "auto")
-            .append("path")
-            .attr("d", "M 0 0 L 10 5 L 0 10 Z")
-            .attr("fill", "#5B9BD5");
-
-        const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-        // Check if reverse edge exists for curving
-        const edgeSet = new Set(edges.map(e => e.source + "|" + e.target));
-
-        function arcPath(d) {{
-            const x1 = xScale(nodeMap.get(d.source).x);
-            const y1 = yScale(nodeMap.get(d.source).y);
-            const x2 = xScale(nodeMap.get(d.target).x);
-            const y2 = yScale(nodeMap.get(d.target).y);
-
-            const dx = x2 - x1;
-            const dy = y2 - y1;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            const hasBidi = edgeSet.has(d.target + "|" + d.source);
-            const offset = hasBidi ? 30 : 0;
-
-            // Midpoint + perpendicular offset
-            const mx = (x1 + x2) / 2 + (-dy / dist) * offset;
-            const my = (y1 + y2) / 2 + (dx / dist) * offset;
-
-            return "M" + x1 + "," + y1 +
-                   " Q" + mx + "," + my +
-                   " " + x2 + "," + y2;
-        }}
-
-        svg.selectAll(".edge")
-            .data(edges)
-            .enter()
-            .append("path")
-            .attr("d", arcPath)
-            .attr("fill", "none")
-            .attr("stroke", "#5B9BD5")
-            .attr("stroke-width", d => d.weight * 2)
-            .attr("marker-end", "url(#arrow)")
-            .attr("opacity", 0.8);
-
-        // Edge weight labels along the arc
-        svg.selectAll(".edge-label")
-            .data(edges)
-            .enter()
-            .append("text")
-            .each(function(d) {{
-                const x1 = xScale(nodeMap.get(d.source).x);
-                const y1 = yScale(nodeMap.get(d.source).y);
-                const x2 = xScale(nodeMap.get(d.target).x);
-                const y2 = yScale(nodeMap.get(d.target).y);
-                const mx = (x1 + x2) / 2;
-                const my = (y1 + y2) / 2;
-
-                // Offset label perpendicular to edge
-                const dx = x2 - x1;
-                const dy = y2 - y1;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                const hasBidi = edgeSet.has(d.target + "|" + d.source);
-                const offset = hasBidi ? 12 : 5;
-                const nx = -dy / dist * offset;
-                const ny = dx / dist * offset;
-
-                d3.select(this)
-                    .attr("x", mx + nx)
-                    .attr("y", my + ny)
-                    .text(d.weight)
-                    .attr("font-size", "11px")
-                    .attr("fill", "#333")
-                    .attr("text-anchor", "middle");
-            }});
-
-        svg.selectAll("circle")
-            .data(nodes)
-            .enter()
-            .append("circle")
-            .attr("cx", d => xScale(d.x))
-            .attr("cy", d => yScale(d.y))
-            .attr("r", 14)
-            .attr("fill", "#FF8C8C")
-            .attr("opacity", d => activeSet.has(d.id) ? 1.0 : 0.2)
-            .attr("stroke", d => activeSet.has(d.id) ? "#333" : "none")
-            .attr("stroke-width", 1.5);
-
-        svg.selectAll(".label")
-            .data(nodes)
-            .enter()
-            .append("text")
-            .attr("x", d => xScale(d.x))
-            .attr("y", d => yScale(d.y) - 20)
-            .text(d => d.id)
-            .attr("font-size", "11px")
-            .attr("fill", d => activeSet.has(d.id) ? "#000" : "#aaa")
-            .attr("text-anchor", "middle");
-
-        svg.selectAll("circle")
-            .on("mouseover", function(event, d) {{
-                d3.select(this).attr("r", 20).attr("fill", "#ff5555");
-            }})
-            .on("mouseout", function(event, d) {{
-                d3.select(this).attr("r", 14).attr("fill", "#FF8C8C")
-                    .attr("opacity", activeSet.has(d.id) ? 1.0 : 0.2);
-            }});
-    </script>
-    </body>
-    </html>
-    """
-
-    d3_graph = mo.iframe(html_content, width="100%", height="620px")
-
-    mo.vstack([
-        mo.md(f"### Network — {selected_date2} at {selected_hour2}:00 — {len(filtered3)} messages"),
-        d3_graph,
-        day_slider,
-        hour_slider
-    ])
-    return
-
-
-@app.cell
-def _(G, df_comms, json_lib, pd):
-    comm_details = []
-    for c_node in df_comms["node_id"]:
-        attrs_c = G.nodes[c_node]
-        ts_c = attrs_c["timestamp"]
-
-        # Find sender and receiver entities
-        sender = None
-        receiver = None
-        for pred in G.predecessors(c_node):
-            if G.nodes[pred].get("type") == "Entity":
-                edge_data = G.edges[pred, c_node]
-                if edge_data.get("type") == "sent":
-                    sender = pred
-        for succ in G.successors(c_node):
-            if G.nodes[succ].get("type") == "Entity":
-                edge_data = G.edges[c_node, succ]
-                if edge_data.get("type") == "received":
-                    receiver = succ
-
-        if sender and receiver:
-            comm_details.append({
-                "node_id": c_node,
-                "timestamp": ts_c,
-                "sender_name": G.nodes[sender].get("name", sender),
-                "sender_type": G.nodes[sender].get("sub_type", ""),
-                "receiver_name": G.nodes[receiver].get("name", receiver),
-                "receiver_type": G.nodes[receiver].get("sub_type", ""),
+def _(G, df_comms, pd):
+    _comm_details = []
+    for _c_node in df_comms["node_id"]:
+        _attrs_c = G.nodes[_c_node]
+        _ts_c = _attrs_c["timestamp"]
+        _content_c = _attrs_c.get("content", "")
+
+        _sender = None
+        _receiver = None
+        for _pred in G.predecessors(_c_node):
+            if G.nodes[_pred].get("type") == "Entity":
+                _edge_data = G.edges[_pred, _c_node]
+                if _edge_data.get("type") == "sent":
+                    _sender = _pred
+        for _succ in G.successors(_c_node):
+            if G.nodes[_succ].get("type") == "Entity":
+                _edge_data = G.edges[_c_node, _succ]
+                if _edge_data.get("type") == "received":
+                    _receiver = _succ
+
+        if _sender and _receiver:
+            _comm_details.append({
+                "node_id": _c_node,
+                "timestamp": _ts_c,
+                "content": _content_c,
+                "sender_name": G.nodes[_sender].get("name", _sender),
+                "sender_type": G.nodes[_sender].get("sub_type", ""),
+                "receiver_name": G.nodes[_receiver].get("name", _receiver),
+                "receiver_type": G.nodes[_receiver].get("sub_type", ""),
             })
 
-    df_details = pd.DataFrame(comm_details)
+    df_details = pd.DataFrame(_comm_details)
     df_details["ts"] = pd.to_datetime(df_details["timestamp"])
     df_details["date_str"] = df_details["ts"].dt.date.astype(str)
     df_details["hour_float"] = df_details["ts"].dt.hour + df_details["ts"].dt.minute / 60
-
-    # Convert Timestamp to string before JSON serialization
     df_details["ts_str"] = df_details["ts"].astype(str)
-    details_json = json_lib.dumps(
-        df_details.drop(columns=["ts"]).to_dict(orient="records")
+    return
+
+
+@app.cell
+def _(mo, pd):
+    df_intents = pd.read_csv("data/categories_v2.csv")
+    print(f"Loaded {len(df_intents)} classified messages")
+    df_intents.head()
+    return (df_intents,)
+
+
+@app.cell
+def _(alt, df_intents, mo):
+    _intent_bar = alt.Chart(df_intents).mark_bar().encode(
+        x=alt.X("count()", title="Number of Messages"),
+        y=alt.Y("category:N", title="Category", sort="-x"),
+        color=alt.Color("category:N", legend=None),
+    ).properties(
+        title="Overall Category Distribution",
+        width=600,
+        height=300
     )
-    print(f"{len(df_details)} communications with sender/receiver info")
-    df_details.head()
-    return details_json, df_details
-
-
-@app.cell
-def _(df_details, mo):
-    mo.ui.table(df_details)
+    mo.vstack([mo.md("### Category Distribution"), _intent_bar])
     return
 
 
 @app.cell
-def _(details_json, df_details, json_lib, mo):
-    unique_dates_list = json_lib.dumps(sorted(df_details["date_str"].unique().tolist()))
-
-    daily_chart = mo.iframe(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://d3js.org/d3.v7.min.js"></script>
-        <style>
-            body {{ margin: 0; font-family: sans-serif; }}
-            .tooltip {{
-                position: absolute;
-                background: white;
-                border: 1px solid #ccc;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 12px;
-                pointer-events: none;
-                box-shadow: 2px 2px 6px rgba(0,0,0,0.15);
-                display: none;
-                max-width: 300px;
-            }}
-        </style>
-    </head>
-    <body>
-    <div id="chart"></div>
-    <div class="tooltip" id="tooltip"></div>
-    <script>
-    try {{
-        var data = {details_json};
-        var dates = {unique_dates_list};
-
-        var typeColors = {{
-            "Person": "#7B68EE",
-            "Organization": "#DC143C",
-            "Vessel": "#00CED1",
-            "Group": "#FF8C00",
-            "Location": "#4169E1"
-        }};
-
-        var margin = {{top: 50, right: 30, bottom: 80, left: 80}};
-        var rowHeight = 80;
-        var summaryHeight = 80;
-        var width = 1000 - margin.left - margin.right;
-        var height = dates.length * rowHeight;
-        var totalHeight = height + summaryHeight;
-        var dotSize = 10;
-        var dotGap = 2;
-        var maxCols = 8;
-
-        var svg = d3.select("#chart")
-            .append("svg")
-            .attr("width", width + margin.left + margin.right)
-            .attr("height", totalHeight + margin.top + margin.bottom)
-            .append("g")
-            .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
-
-        var x = d3.scaleLinear()
-            .domain([8, 16])
-            .range([0, width]);
-
-        var y = d3.scaleBand()
-            .domain(dates)
-            .range([0, height])
-            .padding(0.1);
-
-        var tickVals = [8,9,10,11,12,13,14,15];
-
-        // X axis top
-        svg.append("g")
-            .call(d3.axisTop(x)
-                .tickValues(tickVals)
-                .tickFormat(function(d) {{ return d + ":00"; }}))
-            .selectAll("text")
-            .style("font-size", "11px");
-
-        // Vertical grid lines
-        tickVals.forEach(function(h) {{
-            svg.append("line")
-                .attr("x1", x(h)).attr("x2", x(h))
-                .attr("y1", 0).attr("y2", totalHeight)
-                .attr("stroke", "#eee").attr("stroke-width", 1);
-        }});
-
-        // Row backgrounds and day labels
-        dates.forEach(function(date, i) {{
-            svg.append("rect")
-                .attr("x", 0).attr("y", y(date))
-                .attr("width", width).attr("height", y.bandwidth())
-                .attr("fill", i % 2 === 0 ? "#f9f9f9" : "#ffffff")
-                .attr("stroke", "#eee");
-
-            svg.append("text")
-                .attr("x", -10)
-                .attr("y", y(date) + y.bandwidth() / 2)
-                .attr("text-anchor", "end")
-                .attr("dominant-baseline", "middle")
-                .style("font-size", "12px")
-                .style("font-weight", "bold")
-                .text(i + 1);
-        }});
-
-        // Per-day density
-        dates.forEach(function(date) {{
-            var dayData = data.filter(function(d) {{ return d.date_str === date; }});
-            if (dayData.length === 0) return;
-
-            var values = dayData.map(function(d) {{ return d.hour_float; }});
-            var bins = d3.bin().domain([8, 15.5]).thresholds(25)(values);
-            var maxCount = d3.max(bins, function(b) {{ return b.length; }});
-
-            var areaY = d3.scaleLinear()
-                .domain([0, maxCount || 1])
-                .range([y(date) + y.bandwidth(), y(date) + y.bandwidth() * 0.2]);
-
-            var area = d3.area()
-                .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
-                .y0(y(date) + y.bandwidth())
-                .y1(function(b) {{ return areaY(b.length); }})
-                .curve(d3.curveBasis);
-
-            svg.append("path")
-                .datum(bins)
-                .attr("d", area)
-                .attr("fill", "#5B9BD5")
-                .attr("opacity", 0.15);
-        }});
-
-        // Group by date + hour
-        var grouped = {{}};
-        data.forEach(function(d) {{
-            var hour = Math.floor(d.hour_float);
-            var key = d.date_str + "|" + hour;
-            if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(d);
-        }});
-
-        var tooltip = d3.select("#tooltip");
-
-        // Draw split dots per bin
-        Object.keys(grouped).forEach(function(key) {{
-            var parts = key.split("|");
-            var date = parts[0];
-            var hour = parseInt(parts[1]);
-            var items = grouped[key];
-
-            var binLeft = x(hour) + 5;
-            var rowTop = y(date);
-            var bandHeight = y.bandwidth();
-
-            items.forEach(function(d, idx) {{
-                var col = idx % maxCols;
-                var row = Math.floor(idx / maxCols);
-
-                var px = binLeft + col * (dotSize + dotGap);
-                var py = rowTop + row * (dotSize + dotGap);
-
-                var g = svg.append("g")
-                    .style("cursor", "pointer")
-                    .on("mouseover", function(event) {{
-                        d3.select(this).select(".outline").attr("stroke", "#333").attr("stroke-width", 2);
-                        tooltip.style("display", "block")
-                            .html("<strong>" + d.sender_name + " → " + d.receiver_name + "</strong><br/>"
-                                + d.timestamp + "<br/>"
-                                + "<span style='color:" + (typeColors[d.sender_type]||"#999") + "'>■</span> "
-                                + d.sender_type + " → "
-                                + "<span style='color:" + (typeColors[d.receiver_type]||"#999") + "'>■</span> "
-                                + d.receiver_type)
-                            .style("left", (event.pageX + 12) + "px")
-                            .style("top", (event.pageY - 20) + "px");
-                    }})
-                    .on("mouseout", function() {{
-                        d3.select(this).select(".outline").attr("stroke", "none");
-                        tooltip.style("display", "none");
-                    }});
-
-                g.append("rect")
-                    .attr("x", px).attr("y", py)
-                    .attr("width", dotSize / 2).attr("height", dotSize)
-                    .attr("fill", typeColors[d.sender_type] || "#999");
-
-                g.append("rect")
-                    .attr("x", px + dotSize / 2).attr("y", py)
-                    .attr("width", dotSize / 2).attr("height", dotSize)
-                    .attr("fill", typeColors[d.receiver_type] || "#999");
-
-                g.append("rect")
-                    .attr("class", "outline")
-                    .attr("x", px).attr("y", py)
-                    .attr("width", dotSize).attr("height", dotSize)
-                    .attr("fill", "none").attr("rx", 1);
-            }});
-        }});
-
-        // === Summary density at bottom ===
-        var summaryTop = height + 10;
-
-        // Background
-        svg.append("rect")
-            .attr("x", 0).attr("y", summaryTop)
-            .attr("width", width).attr("height", summaryHeight)
-            .attr("fill", "#f0f0f0")
-            .attr("stroke", "#ddd");
-
-        // Label
-        svg.append("text")
-            .attr("x", -10)
-            .attr("y", summaryTop + summaryHeight / 2)
-            .attr("text-anchor", "end")
-            .attr("dominant-baseline", "middle")
-            .style("font-size", "11px")
-            .style("font-weight", "bold")
-            .text("All");
-
-        // Overall density
-        var allValues = data.map(function(d) {{ return d.hour_float; }});
-        var allBins = d3.bin().domain([8, 15.5]).thresholds(40)(allValues);
-        var allMax = d3.max(allBins, function(b) {{ return b.length; }});
-
-        var summaryY = d3.scaleLinear()
-            .domain([0, allMax || 1])
-            .range([summaryTop + summaryHeight, summaryTop + 10]);
-
-        var summaryArea = d3.area()
-            .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
-            .y0(summaryTop + summaryHeight)
-            .y1(function(b) {{ return summaryY(b.length); }})
-            .curve(d3.curveBasis);
-
-        svg.append("path")
-            .datum(allBins)
-            .attr("d", summaryArea)
-            .attr("fill", "#5B9BD5")
-            .attr("opacity", 0.35);
-
-        // Summary line on top of area
-        var summaryLine = d3.line()
-            .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
-            .y(function(b) {{ return summaryY(b.length); }})
-            .curve(d3.curveBasis);
-
-        svg.append("path")
-            .datum(allBins)
-            .attr("d", summaryLine)
-            .attr("fill", "none")
-            .attr("stroke", "#5B9BD5")
-            .attr("stroke-width", 2);
-
-        // === Bottom X axis ===
-        svg.append("g")
-            .attr("transform", "translate(0," + (summaryTop + summaryHeight) + ")")
-            .call(d3.axisBottom(x)
-                .tickValues(tickVals)
-                .tickFormat(function(d) {{ return d + ":00"; }}))
-            .selectAll("text")
-            .style("font-size", "11px");
-
-        // Legend
-        var legendData = Object.entries(typeColors);
-        var legend = svg.append("g")
-            .attr("transform", "translate(0," + (summaryTop + summaryHeight + 30) + ")");
-
-        legendData.forEach(function(entry, i) {{
-            legend.append("rect")
-                .attr("x", i * 130).attr("y", 0)
-                .attr("width", 12).attr("height", 12)
-                .attr("fill", entry[1]).attr("rx", 2);
-            legend.append("text")
-                .attr("x", i * 130 + 18).attr("y", 10)
-                .text(entry[0]).style("font-size", "11px");
-        }});
-
-    }} catch(e) {{
-        document.getElementById("chart").innerHTML = "<pre style='color:red'>" + e.message + "\\n" + e.stack + "</pre>";
-    }}
-    </script>
-    </body>
-    </html>
-    """, width="100%", height=f"{(len(sorted(df_details['date_str'].unique().tolist())) * 80) + 280}px")
-    daily_chart
+def _(alt, df_intents, mo):
+    _intent_entity = alt.Chart(df_intents).mark_bar().encode(
+        x=alt.X("count()", title="Count"),
+        y=alt.Y("sender_name:N", title="Entity", sort="-x"),
+        color=alt.Color("category:N", title="Category"),
+    ).properties(
+        title="Message Categories by Sender",
+        width=700,
+        height=500
+    )
+    mo.vstack([mo.md("### Category by Entity"), _intent_entity])
     return
 
 
 @app.cell
-def _(df_details, json_lib):
-    # Get all entities involved in communications with their types
-    entity_types = {}
-    for _, row in df_details.iterrows():
-        entity_types[row["sender_name"]] = row["sender_type"]
-        entity_types[row["receiver_name"]] = row["receiver_type"]
+def _(df_intents, mo):
+    _unique_cats = ["All"] + sorted(df_intents["category"].unique().tolist())
+    category_dropdown = mo.ui.dropdown(options=_unique_cats, value="All", label="Filter by Category")
 
-    # Arrange entities in a circle
-    import math
-    entity_names = sorted(entity_types.keys())
-    num_entities = len(entity_names)
-    circle_nodes = []
-    for i, name in enumerate(entity_names):
-        angle = (2 * math.pi * i / num_entities) - math.pi / 2
-        circle_nodes.append({
-            "id": name,
-            "type": entity_types[name],
-            "x": math.cos(angle),
-            "y": math.sin(angle),
-        })
+    _entity_types = ["All"] + sorted(set(
+        [t for t in df_intents["sender_type"].unique().tolist() if t] +
+        [t for t in df_intents["receiver_type"].unique().tolist() if t]
+    ))
+    entity_type_dropdown = mo.ui.dropdown(options=_entity_types, value="All", label="Filter by Entity Type")
 
-    # Build edges per day per hour
-    day_hour_edges = {}
-    for _, row in df_details.iterrows():
-        date_s = row["date_str"]
-        hr = int(row["hour_float"])
-        key = date_s + "|" + str(hr)
-        if key not in day_hour_edges:
-            day_hour_edges[key] = []
-        day_hour_edges[key].append({
-            "source": row["sender_name"],
-            "target": row["receiver_name"],
-        })
+    _all_entities = ["All"] + sorted(set(
+        df_intents["sender_name"].dropna().unique().tolist() +
+        df_intents["receiver_name"].dropna().unique().tolist()
+    ))
+    entity_dropdown = mo.ui.dropdown(options=_all_entities, value="All", label="Filter by Entity")
 
-    # Aggregate: count per source-target per day-hour
-    from collections import Counter as Ctr
-    day_hour_agg = {}
-    for key, edge_list in day_hour_edges.items():
-        counts = Ctr()
-        for e in edge_list:
-            counts[(e["source"], e["target"])] += 1
-        day_hour_agg[key] = [
-            {"source": s, "target": t, "weight": w}
-            for (s, t), w in counts.items()
-        ]
-
-    circle_json = json_lib.dumps(circle_nodes)
-    day_hour_json = json_lib.dumps(day_hour_agg)
-    dates_list_json = json_lib.dumps(sorted(df_details["date_str"].unique().tolist()))
-    return circle_json, day_hour_json
-
-
-@app.cell
-def _(df_details, mo):
-    day_slider_sm = mo.ui.slider(
-        start=0,
-        stop=len(sorted(df_details["date_str"].unique().tolist())) - 1,
-        step=1,
-        value=0,
-        label="Day",
-        full_width=True,
+    suspicion_slider = mo.ui.slider(
+        start=0, stop=10, step=1, value=0,
+        label="Min. Suspicion",
         show_value=True
     )
-    day_slider_sm
-    return (day_slider_sm,)
+    return category_dropdown, entity_dropdown, entity_type_dropdown, suspicion_slider
 
 
 @app.cell
-def _(circle_json, day_hour_json, day_slider_sm, df_details, mo):
-    sm_dates = sorted(df_details["date_str"].unique().tolist())
-    selected_day_sm = sm_dates[day_slider_sm.value]
+def _(
+    category_dropdown,
+    df_intents,
+    entity_dropdown,
+    entity_type_dropdown,
+    json_lib,
+    mo,
+    suspicion_slider,
+):
+    _selected_cat = category_dropdown.value
+    _min_suspicion = suspicion_slider.value
 
-    circle_multiples = mo.iframe(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://d3js.org/d3.v7.min.js"></script>
-        <style>
-            body {{ margin: 0; font-family: sans-serif; }}
-            .tooltip {{
-                position: absolute;
-                background: white;
-                border: 1px solid #ccc;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 12px;
-                pointer-events: none;
-                box-shadow: 2px 2px 6px rgba(0,0,0,0.15);
-                display: none;
-                max-width: 250px;
-                z-index: 100;
-            }}
-            .entity-node {{
-                cursor: pointer;
-            }}
-            .entity-node:hover circle {{
-                stroke-width: 3;
-            }}
-        </style>
-    </head>
-    <body>
-    <div id="chart"></div>
-    <div class="tooltip" id="tooltip"></div>
-    <script>
-    try {{
-        var nodes = {circle_json};
-        var dayHourEdges = {day_hour_json};
-        var selectedDay = "{selected_day_sm}";
-        var hours = [8,9,10,11,12,13,14];
+    # Apply filters
+    _df_filtered = df_intents.copy()
 
-        var typeColors = {{
-            "Person": "#4169E1",
-            "Organization": "#DC143C",
-            "Vessel": "#FF8C00",
-            "Group": "#9932CC",
-            "Location": "#2E8B57"
-        }};
+    if _selected_cat != "All":
+        _df_filtered = _df_filtered[_df_filtered["category"] == _selected_cat]
 
-        var cols = 4;
-        var cellSize = 300;
-        var pad = 15;
-        var rowCount = Math.ceil(hours.length / cols);
-        var margin = {{top: 60, right: 20, bottom: 60, left: 20}};
-        var totalW = cols * (cellSize + pad) + margin.left + margin.right;
-        var totalH = rowCount * (cellSize + pad) + margin.top + margin.bottom;
-        var radius = cellSize / 2 - 40;
+    if entity_type_dropdown.value != "All":
+        _df_filtered = _df_filtered[
+            (_df_filtered["sender_type"] == entity_type_dropdown.value) |
+            (_df_filtered["receiver_type"] == entity_type_dropdown.value)
+        ]
 
-        var nodeMap = new Map(nodes.map(function(n) {{ return [n.id, n]; }}));
+    if entity_dropdown.value != "All":
+        _df_filtered = _df_filtered[
+            (_df_filtered["sender_name"] == entity_dropdown.value) |
+            (_df_filtered["receiver_name"] == entity_dropdown.value)
+        ]
 
-        var svg = d3.select("#chart")
-            .append("svg")
-            .attr("width", totalW)
-            .attr("height", totalH);
+    if _min_suspicion > 0:
+        _df_filtered = _df_filtered[_df_filtered["suspicion"] >= _min_suspicion]
 
-        var tooltip = d3.select("#tooltip");
+    _unique_dates = json_lib.dumps(sorted(df_intents["date_str"].unique().tolist()))
 
-        // Track selected entity
-        var selectedEntity = null;
+    _category_colors = {
+        "routine operations": "#5B9BD5",
+        "environmental monitoring": "#3cb44b",
+        "permit and regulatory": "#42d4f4",
+        "covert coordination": "#f58231",
+        "illegal activity": "#e6194b",
+        "surveillance and intelligence": "#911eb4",
+        "cover story": "#ffe119",
+        "music and tourism": "#f032e6",
+        "interpersonal and social": "#a9a9a9",
+        "command and control": "#800000",
+        "unknown": "#999999"
+    }
 
-        // Title
-        svg.append("text")
-            .attr("x", totalW / 2)
-            .attr("y", 25)
-            .attr("text-anchor", "middle")
-            .style("font-size", "16px")
-            .style("font-weight", "bold")
-            .text("Communication Networks — Day " + (parseInt("{day_slider_sm.value}") + 1) + " (" + selectedDay + ")");
+    # Build filtered records for D3
+    _records = []
+    for _, _row in _df_filtered.iterrows():
+        _records.append({
+            "node_id": str(_row["node_id"]),
+            "sender_name": str(_row["sender_name"]),
+            "receiver_name": str(_row["receiver_name"]),
+            "sender_type": str(_row["sender_type"]),
+            "receiver_type": str(_row["receiver_type"]),
+            "date_str": str(_row["date_str"]),
+            "hour_float": float(_row["hour_float"]),
+            "timestamp": str(_row["timestamp"]),
+            "category": str(_row["category"]),
+            "suspicion": int(_row["suspicion"]) if str(_row["suspicion"]).isdigit() else 0,
+            "content": str(_row["content"]),
+            "category_color": _category_colors.get(str(_row["category"]), "#999"),
+        })
 
-        // Store references for filtering
-        var allEdgePaths = [];
-        var allNodeGroups = [];
-        var allLabels = [];
+    # Build ALL records (unfiltered) for chat history and ego network
+    _all_records = []
+    for _, _row in df_intents.iterrows():
+        _all_records.append({
+            "node_id": str(_row["node_id"]),
+            "sender_name": str(_row["sender_name"]),
+            "receiver_name": str(_row["receiver_name"]),
+            "sender_type": str(_row["sender_type"]),
+            "receiver_type": str(_row["receiver_type"]),
+            "date_str": str(_row["date_str"]),
+            "hour_float": float(_row["hour_float"]),
+            "timestamp": str(_row["timestamp"]),
+            "category": str(_row["category"]),
+            "suspicion": int(_row["suspicion"]) if str(_row["suspicion"]).isdigit() else 0,
+            "content": str(_row["content"]),
+            "category_color": _category_colors.get(str(_row["category"]), "#999"),
+        })
 
-        hours.forEach(function(hr, i) {{
-            var col = i % cols;
-            var row = Math.floor(i / cols);
-            var ox = margin.left + col * (cellSize + pad) + cellSize / 2;
-            var oy = margin.top + row * (cellSize + pad) + cellSize / 2;
+    _filtered_json = json_lib.dumps(_records)
+    _all_json = json_lib.dumps(_all_records)
+    _category_colors_json = json_lib.dumps(_category_colors)
+    _msg_count = len(_df_filtered)
 
-            var g = svg.append("g")
-                .attr("transform", "translate(" + ox + "," + oy + ")");
-
-            // Cell background
-            g.append("circle")
-                .attr("r", radius + 25)
-                .attr("fill", "#fafafa")
-                .attr("stroke", "#ddd");
-
-            // Hour label
-            g.append("text")
-                .attr("y", -radius - 12)
-                .attr("text-anchor", "middle")
-                .style("font-size", "13px")
-                .style("font-weight", "bold")
-                .text(hr + ":00");
-
-            // Get edges for this day+hour
-            var key = selectedDay + "|" + hr;
-            var edges = dayHourEdges[key] || [];
-
-            var activeNodes = new Set();
-            edges.forEach(function(e) {{
-                activeNodes.add(e.source);
-                activeNodes.add(e.target);
-            }});
-
-            var edgeSet = new Set(edges.map(function(e) {{ return e.source + "|" + e.target; }}));
-            var maxW = d3.max(edges, function(e) {{ return e.weight; }}) || 1;
-
-            // Arrow marker
-            g.append("defs").append("marker")
-                .attr("id", "arr-" + hr)
-                .attr("viewBox", "0 0 10 10")
-                .attr("refX", 12)
-                .attr("refY", 5)
-                .attr("markerWidth", 5)
-                .attr("markerHeight", 5)
-                .attr("orient", "auto")
-                .append("path")
-                .attr("d", "M 0 0 L 10 5 L 0 10 Z")
-                .attr("fill", "#888");
-
-            // Draw edges
-            edges.forEach(function(e) {{
-                var src = nodeMap.get(e.source);
-                var tgt = nodeMap.get(e.target);
-                if (!src || !tgt) return;
-
-                var x1 = src.x * radius;
-                var y1 = src.y * radius;
-                var x2 = tgt.x * radius;
-                var y2 = tgt.y * radius;
-
-                var dx = x2 - x1;
-                var dy = y2 - y1;
-                var dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                var hasBidi = edgeSet.has(e.target + "|" + e.source);
-                var offset = hasBidi ? 20 : 0;
-                var mx = (x1 + x2) / 2 + (-dy / dist) * offset;
-                var my = (y1 + y2) / 2 + (dx / dist) * offset;
-
-                var strokeW = Math.max(0.5, (e.weight / maxW) * 3);
-
-                var path = g.append("path")
-                    .attr("d", "M" + x1 + "," + y1 + " Q" + mx + "," + my + " " + x2 + "," + y2)
-                    .attr("fill", "none")
-                    .attr("stroke", "#999")
-                    .attr("stroke-width", strokeW)
-                    .attr("opacity", 0.4)
-                    .attr("marker-end", "url(#arr-" + hr + ")")
-                    .attr("data-source", e.source)
-                    .attr("data-target", e.target);
-
-                allEdgePaths.push(path);
-            }});
-
-            // Draw nodes
-            nodes.forEach(function(n) {{
-                var isActive = activeNodes.has(n.id);
-                var nx = n.x * radius;
-                var ny = n.y * radius;
-
-                var ng = g.append("g")
-                    .attr("class", "entity-node")
-                    .attr("transform", "translate(" + nx + "," + ny + ")")
-                    .attr("data-entity", n.id)
-                    .attr("data-hour", hr);
-
-                ng.append("circle")
-                    .attr("r", isActive ? 7 : 4)
-                    .attr("fill", typeColors[n.type] || "#999")
-                    .attr("stroke", "#333")
-                    .attr("stroke-width", isActive ? 1.5 : 0.5)
-                    .attr("opacity", isActive ? 1 : 0.25);
-
-                allNodeGroups.push({{group: ng, id: n.id, hour: hr, active: isActive}});
-
-                // Label for active nodes
-                if (isActive) {{
-                    var angle = Math.atan2(n.y, n.x);
-                    var lx = Math.cos(angle) * 18;
-                    var ly = Math.sin(angle) * 18;
-                    var anchor = (angle > Math.PI / 2 || angle < -Math.PI / 2) ? "end" : "start";
-
-                    var label = g.append("text")
-                        .attr("x", nx + lx)
-                        .attr("y", ny + ly)
-                        .attr("text-anchor", anchor)
-                        .attr("dominant-baseline", "middle")
-                        .style("font-size", "7px")
-                        .style("fill", "#333")
-                        .attr("data-entity", n.id)
-                        .text(n.id.length > 12 ? n.id.substring(0, 12) + "..." : n.id);
-
-                    allLabels.push(label);
-                }}
-            }});
-
-            // Message count
-            var totalMsgs = edges.reduce(function(sum, e) {{ return sum + e.weight; }}, 0);
-            g.append("text")
-                .attr("y", radius + 18)
-                .attr("text-anchor", "middle")
-                .style("font-size", "10px")
-                .style("fill", "#888")
-                .text(totalMsgs + " messages");
-        }});
-
-        // Click handler on all entity nodes
-        svg.selectAll(".entity-node").on("click", function(event) {{
-            var clickedEntity = d3.select(this).attr("data-entity");
-
-            if (selectedEntity === clickedEntity) {{
-                // Deselect: reset everything
-                selectedEntity = null;
-                allEdgePaths.forEach(function(p) {{
-                    p.attr("opacity", 0.4).attr("stroke", "#999");
-                }});
-                svg.selectAll(".entity-node circle")
-                    .attr("opacity", function() {{
-                        return 0.6;
-                    }});
-            }} else {{
-                selectedEntity = clickedEntity;
-
-                // Dim all edges
-                allEdgePaths.forEach(function(p) {{
-                    var src = p.attr("data-source");
-                    var tgt = p.attr("data-target");
-                    if (src === clickedEntity || tgt === clickedEntity) {{
-                        p.attr("opacity", 0.8).attr("stroke", "#ff5555").attr("stroke-width", 2.5);
-                    }} else {{
-                        p.attr("opacity", 0.05).attr("stroke", "#ccc");
-                    }}
-                }});
-
-                // Dim nodes not connected
-                svg.selectAll(".entity-node circle")
-                    .attr("opacity", 0.15);
-
-                // Highlight clicked entity nodes
-                svg.selectAll(".entity-node")
-                    .filter(function() {{ return d3.select(this).attr("data-entity") === clickedEntity; }})
-                    .select("circle")
-                    .attr("opacity", 1)
-                    .attr("stroke-width", 3)
-                    .attr("stroke", "#ff5555");
-
-                // Also highlight connected entities
-                allEdgePaths.forEach(function(p) {{
-                    var src = p.attr("data-source");
-                    var tgt = p.attr("data-target");
-                    if (src === clickedEntity) {{
-                        svg.selectAll(".entity-node")
-                            .filter(function() {{ return d3.select(this).attr("data-entity") === tgt; }})
-                            .select("circle").attr("opacity", 0.8);
-                    }}
-                    if (tgt === clickedEntity) {{
-                        svg.selectAll(".entity-node")
-                            .filter(function() {{ return d3.select(this).attr("data-entity") === src; }})
-                            .select("circle").attr("opacity", 0.8);
-                    }}
-                }});
-            }}
-        }});
-
-        // Hover tooltip on nodes
-        svg.selectAll(".entity-node")
-            .on("mouseover", function(event) {{
-                var ent = d3.select(this).attr("data-entity");
-                tooltip.style("display", "block")
-                    .html("<strong>" + ent + "</strong><br/>" + (nodeMap.get(ent).type))
-                    .style("left", (event.pageX + 12) + "px")
-                    .style("top", (event.pageY - 20) + "px");
-            }})
-            .on("mouseout", function() {{
-                tooltip.style("display", "none");
-            }});
-
-        // Legend
-        var legendG = svg.append("g")
-            .attr("transform", "translate(" + margin.left + "," + (totalH - 40) + ")");
-
-        var legendItems = Object.entries(typeColors);
-        legendItems.forEach(function(entry, i) {{
-            legendG.append("circle")
-                .attr("cx", i * 130 + 8)
-                .attr("cy", 0)
-                .attr("r", 6)
-                .attr("fill", entry[1]);
-            legendG.append("text")
-                .attr("x", i * 130 + 20)
-                .attr("y", 4)
-                .text(entry[0])
-                .style("font-size", "11px");
-        }});
-
-        // Click instruction
-        legendG.append("text")
-            .attr("x", totalW - margin.right - margin.left - 20)
-            .attr("y", 4)
-            .attr("text-anchor", "end")
-            .style("font-size", "10px")
-            .style("fill", "#888")
-            .text("Click an entity to filter. Click again to reset.");
-
-    }} catch(e) {{
-        document.getElementById("chart").innerHTML = "<pre style='color:red'>" + e.message + "\\n" + e.stack + "</pre>";
+    # === THE BIG COMBINED D3 IFRAME ===
+    _dashboard = mo.iframe(f"""
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: 'Segoe UI', sans-serif; background: #fafafa; }}
+    #container {{ display: flex; width: 100%; height: 1500px; }}
+    #timeline-panel {{ width: 62%; height: 100%; overflow-y: auto; border-right: 2px solid #ddd; background: white; }}
+    #right-panel {{ width: 38%; height: 100%; display: flex; flex-direction: column; }}
+    #chat-panel {{ height: 50%; border-bottom: 2px solid #ddd; display: flex; flex-direction: column; background: white; }}
+    #ego-panel {{ height: 50%; background: white; position: relative; }}
+    #chat-header {{ padding: 8px 12px; background: #f0f0f0; border-bottom: 1px solid #ddd;
+                    font-weight: bold; font-size: 13px; flex-shrink: 0; }}
+    #chat-tabs {{ display: flex; gap: 0; border-bottom: 1px solid #ddd; flex-shrink: 0; }}
+    .chat-tab {{ padding: 7px 14px; font-size: 12px; cursor: pointer; border: none;
+                 background: #f0f0f0; border-bottom: 2px solid transparent; color: #666;
+                 transition: all 0.15s; }}
+    .chat-tab:hover {{ background: #e8e8e8; }}
+    .chat-tab.active {{ background: white; color: #333; font-weight: bold;
+                        border-bottom: 2px solid #5B9BD5; }}
+    #chat-messages {{ flex: 1; overflow-y: auto; padding: 8px; }}
+    .chat-msg {{ padding: 8px 10px; margin: 4px 0; border-radius: 8px; font-size: 12px;
+                 border-left: 4px solid #ccc; background: #f9f9f9; cursor: pointer; transition: all 0.15s; }}
+    .chat-msg:hover {{ background: #eef; }}
+    .chat-msg.highlighted {{ background: #fff3cd; border-left-color: #ff5555; box-shadow: 0 0 6px rgba(255,85,85,0.3); }}
+    .chat-msg .full-content {{ white-space: pre-wrap; word-break: break-word; }}
+    .chat-msg .meta {{ font-size: 10px; color: #888; margin-top: 3px; }}
+    .chat-msg .sender {{ font-weight: bold; }}
+    .chat-msg .badge {{ display: inline-block; padding: 1px 6px; border-radius: 3px;
+                        font-size: 9px; color: white; margin-left: 4px; }}
+    .tooltip {{
+        position: fixed; background: white; border: 1px solid #ccc; border-radius: 6px;
+        padding: 8px 12px; font-size: 12px; pointer-events: none;
+        box-shadow: 2px 2px 6px rgba(0,0,0,0.15); display: none; max-width: 350px; z-index: 1000;
     }}
-    </script>
-    </body>
-    </html>
-    """, width="100%", height="720px")
+    #ego-title {{ position: absolute; top: 6px; left: 12px; font-size: 13px; font-weight: bold; color: #333; z-index: 10; }}
+    #chat-empty {{ padding: 30px; text-align: center; color: #aaa; font-size: 13px; }}
+    #ego-empty {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+                  color: #aaa; font-size: 13px; text-align: center; }}
+</style>
+</head>
+<body>
+<div id="container">
+    <div id="timeline-panel"><div id="chart"></div></div>
+    <div id="right-panel">
+        <div id="chat-panel">
+            <div id="chat-header">Message History <span id="chat-entity" style="color:#555"></span></div>
+            <div id="chat-tabs">
+                <button class="chat-tab active" id="tab-all" onclick="switchTab('all')">All from Sender</button>
+                <button class="chat-tab" id="tab-convo" onclick="switchTab('convo')">Conversation</button>
+            </div>
+            <div id="chat-messages"><div id="chat-empty">Click a message in the timeline to see conversation history</div></div>
+        </div>
+        <div id="ego-panel">
+            <div id="ego-title">Ego Network</div>
+            <div id="ego-empty">Click a message to see the sender's communication network</div>
+            <svg id="ego-svg" width="100%" height="100%"></svg>
+        </div>
+    </div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+try {{
+
+var filteredData = {_filtered_json};
+var allData = {_all_json};
+var allDates = {_unique_dates};
+var categoryColors = {_category_colors_json};
+
+var typeColors = {{
+    "Person": "#7B68EE",
+    "Organization": "#DC143C",
+    "Vessel": "#00CED1",
+    "Group": "#FF8C00",
+    "Location": "#4169E1"
+}};
+
+// ============================================================
+// LEFT PANEL: TIMELINE
+// ============================================================
+var margin = {{top: 50, right: 20, bottom: 100, left: 70}};
+var rowHeight = 80;
+var summaryHeight = 80;
+var tlWidth = document.getElementById("timeline-panel").offsetWidth - margin.left - margin.right - 10;
+if (tlWidth < 400) tlWidth = 620;
+var tlHeight = allDates.length * rowHeight;
+var totalHeight = tlHeight + summaryHeight;
+var dotSize = 10;
+var dotGap = 2;
+var maxCols = 6;
+
+var svg = d3.select("#chart")
+    .append("svg")
+    .attr("width", tlWidth + margin.left + margin.right)
+    .attr("height", totalHeight + margin.top + margin.bottom)
+    .append("g")
+    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+var x = d3.scaleLinear().domain([8, 16]).range([0, tlWidth]);
+var y = d3.scaleBand().domain(allDates).range([0, tlHeight]).padding(0.1);
+var tickVals = [8,9,10,11,12,13,14,15];
+
+svg.append("g")
+    .call(d3.axisTop(x).tickValues(tickVals).tickFormat(function(d) {{ return d + ":00"; }}))
+    .selectAll("text").style("font-size", "11px");
+
+tickVals.forEach(function(h) {{
+    svg.append("line").attr("x1", x(h)).attr("x2", x(h))
+        .attr("y1", 0).attr("y2", totalHeight)
+        .attr("stroke", "#eee").attr("stroke-width", 1);
+}});
+
+allDates.forEach(function(date, i) {{
+    svg.append("rect").attr("x", 0).attr("y", y(date))
+        .attr("width", tlWidth).attr("height", y.bandwidth())
+        .attr("fill", i % 2 === 0 ? "#f9f9f9" : "#ffffff").attr("stroke", "#eee");
+    svg.append("text").attr("x", -8).attr("y", y(date) + y.bandwidth() / 2)
+        .attr("text-anchor", "end").attr("dominant-baseline", "middle")
+        .style("font-size", "11px").style("font-weight", "bold").text(i + 1);
+}});
+
+// Density curves
+allDates.forEach(function(date) {{
+    var dayData = filteredData.filter(function(d) {{ return d.date_str === date; }});
+    if (dayData.length === 0) return;
+    var values = dayData.map(function(d) {{ return d.hour_float; }});
+    var bins = d3.bin().domain([8, 15.5]).thresholds(25)(values);
+    var maxCount = d3.max(bins, function(b) {{ return b.length; }});
+    var areaY = d3.scaleLinear().domain([0, maxCount || 1])
+        .range([y(date) + y.bandwidth(), y(date) + y.bandwidth() * 0.2]);
+    var area = d3.area()
+        .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
+        .y0(y(date) + y.bandwidth())
+        .y1(function(b) {{ return areaY(b.length); }})
+        .curve(d3.curveBasis);
+    svg.append("path").datum(bins).attr("d", area).attr("fill", "#5B9BD5").attr("opacity", 0.15);
+}});
+
+// Group by date+hour
+var grouped = {{}};
+filteredData.forEach(function(d) {{
+    var hour = Math.floor(d.hour_float);
+    var key = d.date_str + "|" + hour;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(d);
+}});
+
+var tooltip = d3.select("#tooltip");
+var allDotGroups = [];
+
+// Draw clickable dots
+Object.keys(grouped).forEach(function(key) {{
+    var parts = key.split("|");
+    var date = parts[0];
+    var hour = parseInt(parts[1]);
+    var items = grouped[key];
+    var binLeft = x(hour) + 4;
+    var rowTop = y(date);
+
+    items.forEach(function(d, idx) {{
+        var col = idx % maxCols;
+        var row = Math.floor(idx / maxCols);
+        var px = binLeft + col * (dotSize + dotGap);
+        var py = rowTop + row * (dotSize + dotGap);
+
+        var g = svg.append("g").style("cursor", "pointer").datum(d);
+
+        g.append("rect").attr("x", px).attr("y", py)
+            .attr("width", dotSize / 2).attr("height", dotSize)
+            .attr("fill", typeColors[d.sender_type] || "#999");
+        g.append("rect").attr("x", px + dotSize / 2).attr("y", py)
+            .attr("width", dotSize / 2).attr("height", dotSize)
+            .attr("fill", typeColors[d.receiver_type] || "#999");
+        g.append("rect").attr("class", "outline")
+            .attr("x", px).attr("y", py)
+            .attr("width", dotSize).attr("height", dotSize)
+            .attr("fill", "none").attr("rx", 1)
+            .attr("stroke", d.category_color).attr("stroke-width", 2);
+
+        g.on("mouseover", function(event) {{
+            d3.select(this).select(".outline").attr("stroke", "#333").attr("stroke-width", 3);
+            tooltip.style("display", "block")
+                .html(
+                    "<strong>" + d.sender_name + " &rarr; " + d.receiver_name + "</strong><br/>"
+                    + d.timestamp + "<br/>"
+                    + "<strong>Category:</strong> " + d.category
+                    + " <span style='background:" + (categoryColors[d.category]||"#999")
+                    + ";color:#fff;padding:1px 5px;border-radius:3px;font-size:10px'>"
+                    + d.suspicion + "/10</span><br/>"
+                    + "<em>" + d.content.substring(0,120) + "</em>"
+                )
+                .style("left", (event.clientX + 14) + "px")
+                .style("top", (event.clientY - 20) + "px");
+        }})
+        .on("mouseout", function() {{
+            d3.select(this).select(".outline").attr("stroke", d.category_color).attr("stroke-width", 2);
+            tooltip.style("display", "none");
+        }})
+        .on("click", function(event, datum) {{
+            onMessageClick(datum);
+        }});
+
+        allDotGroups.push({{g: g, d: d}});
+    }});
+}});
+
+// Summary row
+var summaryTop = tlHeight + 10;
+svg.append("rect").attr("x", 0).attr("y", summaryTop)
+    .attr("width", tlWidth).attr("height", summaryHeight)
+    .attr("fill", "#f0f0f0").attr("stroke", "#ddd");
+svg.append("text").attr("x", -8).attr("y", summaryTop + summaryHeight / 2)
+    .attr("text-anchor", "end").attr("dominant-baseline", "middle")
+    .style("font-size", "11px").style("font-weight", "bold").text("All");
+
+var allValues = filteredData.map(function(d) {{ return d.hour_float; }});
+if (allValues.length > 0) {{
+    var allBins = d3.bin().domain([8, 15.5]).thresholds(40)(allValues);
+    var allMax = d3.max(allBins, function(b) {{ return b.length; }});
+    var summaryY = d3.scaleLinear().domain([0, allMax || 1])
+        .range([summaryTop + summaryHeight, summaryTop + 10]);
+    var summaryArea = d3.area()
+        .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
+        .y0(summaryTop + summaryHeight)
+        .y1(function(b) {{ return summaryY(b.length); }})
+        .curve(d3.curveBasis);
+    svg.append("path").datum(allBins).attr("d", summaryArea)
+        .attr("fill", "#5B9BD5").attr("opacity", 0.35);
+    svg.append("path").datum(allBins)
+        .attr("d", d3.line()
+            .x(function(b) {{ return x((b.x0 + b.x1) / 2); }})
+            .y(function(b) {{ return summaryY(b.length); }})
+            .curve(d3.curveBasis))
+        .attr("fill", "none").attr("stroke", "#5B9BD5").attr("stroke-width", 2);
+}}
+
+svg.append("g")
+    .attr("transform", "translate(0," + (summaryTop + summaryHeight) + ")")
+    .call(d3.axisBottom(x).tickValues(tickVals).tickFormat(function(d) {{ return d + ":00"; }}))
+    .selectAll("text").style("font-size", "11px");
+
+// Legends
+var leg = svg.append("g").attr("transform", "translate(0," + (summaryTop + summaryHeight + 25) + ")");
+leg.append("text").attr("x", 0).attr("y", 0).text("Entity Type:").style("font-size", "10px").style("font-weight", "bold");
+Object.entries(typeColors).forEach(function(e, i) {{
+    leg.append("rect").attr("x", 80 + i * 105).attr("y", -9).attr("width", 12).attr("height", 12).attr("fill", e[1]).attr("rx", 2);
+    leg.append("text").attr("x", 80 + i * 105 + 16).attr("y", 0).text(e[0]).style("font-size", "9px");
+}});
+var cleg = svg.append("g").attr("transform", "translate(0," + (summaryTop + summaryHeight + 48) + ")");
+cleg.append("text").attr("x", 0).attr("y", 0).text("Category (border):").style("font-size", "10px").style("font-weight", "bold");
+Object.entries(categoryColors).forEach(function(e, i) {{
+    var col = i % 4;
+    var row = Math.floor(i / 4);
+    cleg.append("rect").attr("x", 120 + col * 160).attr("y", -9 + row * 16)
+        .attr("width", 10).attr("height", 10).attr("fill", "none").attr("stroke", e[1]).attr("stroke-width", 2);
+    cleg.append("text").attr("x", 120 + col * 160 + 14).attr("y", row * 16).text(e[0]).style("font-size", "8px");
+}});
+
+// ============================================================
+// CLICK HANDLER — updates chat box + ego network
+// ============================================================
+function onMessageClick(d) {{
+    updateChatBox(d);
+    updateEgoNetwork(d);
+
+    // Highlight the clicked dot in timeline
+    allDotGroups.forEach(function(item) {{
+        if (item.d.node_id === d.node_id) {{
+            item.g.select(".outline").attr("stroke", "#ff0000").attr("stroke-width", 3);
+        }} else {{
+            item.g.select(".outline").attr("stroke", item.d.category_color).attr("stroke-width", 2);
+        }}
+    }});
+}}
+
+// ============================================================
+// RIGHT TOP: CHAT BOX (tabbed)
+// ============================================================
+var currentClickedMsg = null;
+var currentTab = "all";
+
+function switchTab(tab) {{
+    currentTab = tab;
+    document.getElementById("tab-all").className = "chat-tab" + (tab === "all" ? " active" : "");
+    document.getElementById("tab-convo").className = "chat-tab" + (tab === "convo" ? " active" : "");
+    if (currentClickedMsg) renderChat(currentClickedMsg);
+}}
+
+function updateChatBox(clickedMsg) {{
+    currentClickedMsg = clickedMsg;
+    renderChat(clickedMsg);
+}}
+
+function renderChat(clickedMsg) {{
+    var entity = clickedMsg.sender_name;
+    var receiver = clickedMsg.receiver_name;
+
+    if (currentTab === "all") {{
+        document.getElementById("chat-entity").textContent = "— all from " + entity;
+    }} else {{
+        document.getElementById("chat-entity").textContent = "— " + entity + " ↔ " + receiver;
+    }}
+
+    // Filter messages based on active tab
+    var history;
+    if (currentTab === "all") {{
+        history = allData.filter(function(m) {{
+            return m.sender_name === entity || m.receiver_name === entity;
+        }});
+    }} else {{
+        history = allData.filter(function(m) {{
+            return (m.sender_name === entity && m.receiver_name === receiver)
+                || (m.sender_name === receiver && m.receiver_name === entity);
+        }});
+    }}
+
+    history.sort(function(a, b) {{
+        return a.timestamp.localeCompare(b.timestamp);
+    }});
+
+    var container = document.getElementById("chat-messages");
+    container.innerHTML = "";
+
+    if (history.length === 0) {{
+        container.innerHTML = "<div style='padding:20px;text-align:center;color:#aaa'>No messages found</div>";
+        return;
+    }}
+
+    history.forEach(function(m) {{
+        var div = document.createElement("div");
+        var isClicked = m.node_id === clickedMsg.node_id;
+        div.className = "chat-msg" + (isClicked ? " highlighted" : "");
+        div.setAttribute("data-nodeid", m.node_id);
+
+        var isSender = m.sender_name === entity;
+        var catColor = categoryColors[m.category] || "#999";
+        var suspColor = m.suspicion >= 7 ? "#e6194b" : m.suspicion >= 4 ? "#f58231" : "#3cb44b";
+
+        div.style.borderLeftColor = catColor;
+
+        // Show full content for: clicked message always, conversation tab always, else truncate
+        var showFull = isClicked || currentTab === "convo";
+        var contentText = showFull
+            ? m.content
+            : (m.content.length > 150 ? m.content.substring(0, 150) + "\\u2026" : m.content);
+
+        div.innerHTML =
+            "<span class='sender' style='color:" + (isSender ? "#333" : "#666") + "'>"
+            + m.sender_name + " &rarr; " + m.receiver_name + "</span>"
+            + "<span class='badge' style='background:" + suspColor + "'>" + m.suspicion + "/10</span>"
+            + "<span class='badge' style='background:" + catColor + "'>" + m.category + "</span>"
+            + "<div class='full-content' style='margin-top:4px;font-size:12px;color:#333'>"
+            + contentText + "</div>"
+            + "<div class='meta'>" + m.timestamp + "</div>";
+
+        div.addEventListener("click", function() {{
+            onMessageClick(m);
+        }});
+
+        container.appendChild(div);
+    }});
+
+    // Scroll to highlighted
+    var highlighted = container.querySelector(".highlighted");
+    if (highlighted) {{
+        highlighted.scrollIntoView({{ behavior: "smooth", block: "center" }});
+    }}
+}}
+
+// ============================================================
+// RIGHT BOTTOM: EGO NETWORK (circular layout like screenshot)
+// ============================================================
+function updateEgoNetwork(clickedMsg) {{
+    var entity = clickedMsg.sender_name;
+    document.getElementById("ego-title").textContent = "Network — " + entity;
+    var emptyEl = document.getElementById("ego-empty");
+    if (emptyEl) emptyEl.remove();
+
+    // Gather ALL messages involving this entity
+    var entityMsgs = allData.filter(function(m) {{
+        return m.sender_name === entity || m.receiver_name === entity;
+    }});
+
+    // Build set of nodes in subnetwork (ego + partners)
+    var nodeSet = new Set([entity]);
+    entityMsgs.forEach(function(m) {{
+        nodeSet.add(m.sender_name);
+        nodeSet.add(m.receiver_name);
+    }});
+    var nodeList = Array.from(nodeSet);
+
+    // Get entity types
+    var nodeTypeMap = {{}};
+    allData.forEach(function(m) {{
+        if (nodeSet.has(m.sender_name)) nodeTypeMap[m.sender_name] = m.sender_type;
+        if (nodeSet.has(m.receiver_name)) nodeTypeMap[m.receiver_name] = m.receiver_type;
+    }});
+
+    // Build ALL edges between nodes in this subnetwork (not just to ego)
+    var edgePairMap = {{}};
+    allData.forEach(function(m) {{
+        if (nodeSet.has(m.sender_name) && nodeSet.has(m.receiver_name)) {{
+            var k = m.sender_name + "||" + m.receiver_name;
+            if (!edgePairMap[k]) {{
+                edgePairMap[k] = {{ source: m.sender_name, target: m.receiver_name,
+                    count: 0, categories: {{}}, maxSusp: 0 }};
+            }}
+            edgePairMap[k].count++;
+            edgePairMap[k].categories[m.category] = (edgePairMap[k].categories[m.category] || 0) + 1;
+            if (m.suspicion > edgePairMap[k].maxSusp) edgePairMap[k].maxSusp = m.suspicion;
+        }}
+    }});
+    var edges = Object.values(edgePairMap);
+
+    // Clear old SVG
+    var egoSvg = d3.select("#ego-svg");
+    egoSvg.selectAll("*").remove();
+
+    var egoEl = document.getElementById("ego-panel");
+    var egoW = egoEl.offsetWidth || 400;
+    var egoH = egoEl.offsetHeight || 350;
+    var egoR = Math.min(egoW, egoH) / 2 - 70;
+    var ecx = egoW / 2;
+    var ecy = egoH / 2 + 5;
+
+    egoSvg.attr("viewBox", "0 0 " + egoW + " " + egoH);
+
+    // Arrow marker
+    var defs = egoSvg.append("defs");
+    defs.append("marker").attr("id", "ego-arrow")
+        .attr("viewBox", "0 0 10 10").attr("refX", 28).attr("refY", 5)
+        .attr("markerWidth", 4).attr("markerHeight", 4).attr("orient", "auto")
+        .append("path").attr("d", "M 0 0 L 10 5 L 0 10 Z").attr("fill", "#666");
+
+    // Arrange nodes in a circle — ego at top
+    var nNodes = nodeList.length;
+    var egoIdx = nodeList.indexOf(entity);
+    // Move ego to index 0 so it sits at top
+    if (egoIdx > 0) {{
+        nodeList.splice(egoIdx, 1);
+        nodeList.unshift(entity);
+    }}
+
+    var nodePos = {{}};
+    nodeList.forEach(function(name, i) {{
+        var ang = (2 * Math.PI * i / nNodes) - Math.PI / 2;
+        nodePos[name] = {{
+            x: ecx + Math.cos(ang) * egoR,
+            y: ecy + Math.sin(ang) * egoR,
+            ang: ang
+        }};
+    }});
+
+    // Check for bidirectional edges
+    var edgeKeySet = new Set(edges.map(function(e) {{ return e.source + "||" + e.target; }}));
+
+    // Draw edges
+    edges.forEach(function(e) {{
+        var src = nodePos[e.source];
+        var tgt = nodePos[e.target];
+        if (!src || !tgt) return;
+
+        var dx = tgt.x - src.x;
+        var dy = tgt.y - src.y;
+        var dist = Math.sqrt(dx*dx + dy*dy) || 1;
+
+        // Curve offset for bidirectional edges
+        var hasBidi = edgeKeySet.has(e.target + "||" + e.source);
+        var offset = hasBidi ? 20 : 0;
+        var mx = (src.x + tgt.x) / 2 + (-dy / dist) * offset;
+        var my = (src.y + tgt.y) / 2 + (dx / dist) * offset;
+
+        var dominantCat = Object.entries(e.categories).sort(function(a,b){{return b[1]-a[1];}})[0][0];
+        var edgeColor = categoryColors[dominantCat] || "#999";
+
+        // Highlight edges connected to ego
+        var involvesEgo = (e.source === entity || e.target === entity);
+        var opacity = involvesEgo ? 0.7 : 0.2;
+        var strokeW = involvesEgo
+            ? Math.max(1.5, Math.min(e.count * 1.3, 5))
+            : Math.max(0.8, Math.min(e.count * 0.8, 3));
+
+        egoSvg.append("path")
+            .attr("d", "M" + src.x + "," + src.y + " Q" + mx + "," + my + " " + tgt.x + "," + tgt.y)
+            .attr("fill", "none")
+            .attr("stroke", edgeColor)
+            .attr("stroke-width", strokeW)
+            .attr("opacity", opacity)
+            .attr("marker-end", "url(#ego-arrow)");
+    }});
+
+    // Draw nodes
+    var egoTooltip = d3.select("#tooltip");
+
+    nodeList.forEach(function(name) {{
+        var pos = nodePos[name];
+        var isEgo = name === entity;
+        var nType = nodeTypeMap[name] || "";
+        var r = isEgo ? 12 : 8;
+
+        var g = egoSvg.append("g")
+            .attr("transform", "translate(" + pos.x + "," + pos.y + ")")
+            .style("cursor", "pointer");
+
+        // Glow for ego
+        if (isEgo) {{
+            g.append("circle").attr("r", r + 4)
+                .attr("fill", "none").attr("stroke", typeColors[nType] || "#999")
+                .attr("stroke-width", 2).attr("opacity", 0.3);
+        }}
+
+        g.append("circle").attr("r", r)
+            .attr("fill", typeColors[nType] || "#999")
+            .attr("stroke", isEgo ? "#333" : "#555")
+            .attr("stroke-width", isEgo ? 2.5 : 1);
+
+        // Label
+        var anchor = (pos.ang > Math.PI/2 || pos.ang < -Math.PI/2) ? "end" : "start";
+        var labelR = r + 8;
+        var lx = Math.cos(pos.ang) * labelR;
+        var ly = Math.sin(pos.ang) * labelR;
+
+        egoSvg.append("text")
+            .attr("x", pos.x + lx).attr("y", pos.y + ly)
+            .attr("text-anchor", anchor).attr("dominant-baseline", "middle")
+            .style("font-size", isEgo ? "10px" : "9px")
+            .style("font-weight", isEgo ? "bold" : "normal")
+            .style("fill", isEgo ? "#111" : "#444")
+            .text(name.length > 16 ? name.substring(0,16) + "\\u2026" : name);
+
+        // Click to pivot
+        g.on("mouseover", function(event) {{
+            d3.select(this).select("circle").attr("stroke", "#333").attr("stroke-width", 2.5);
+            egoTooltip.style("display", "block")
+                .html("<strong>" + name + "</strong><br/>" + nType)
+                .style("left", (event.clientX + 12) + "px")
+                .style("top", (event.clientY - 20) + "px");
+        }})
+        .on("mouseout", function() {{
+            d3.select(this).select("circle")
+                .attr("stroke", isEgo ? "#333" : "#555")
+                .attr("stroke-width", isEgo ? 2.5 : 1);
+            egoTooltip.style("display", "none");
+        }})
+        .on("click", function() {{
+            var fakeMsg = allData.find(function(m) {{ return m.sender_name === name; }})
+                || allData.find(function(m) {{ return m.receiver_name === name; }});
+            if (fakeMsg) {{
+                var newMsg = Object.assign({{}}, fakeMsg);
+                newMsg.sender_name = name;
+                onMessageClick(newMsg);
+            }}
+        }});
+    }});
+
+    // Legend
+    var eLeg = egoSvg.append("g").attr("transform", "translate(6," + (egoH - 52) + ")");
+    eLeg.append("text").attr("x",0).attr("y",0).style("font-size","10px").style("font-weight","bold").text("Entity type:");
+    var legendTypes = Object.entries(typeColors);
+    legendTypes.forEach(function(e, i) {{
+        eLeg.append("circle").attr("cx", 8 + i * 80).attr("cy", 14).attr("r", 5).attr("fill", e[1]);
+        eLeg.append("text").attr("x", 16 + i * 80).attr("y", 18).style("font-size", "9px").text(e[0]);
+    }});
+    eLeg.append("text").attr("x", 0).attr("y", 34).style("font-size", "9px").style("fill", "#888")
+        .text("Click a node to explore its network. Bright edges = connected to center.");
+}}
+
+}} catch(e) {{
+    document.getElementById("chart").innerHTML = "<pre style='color:red'>" + e.message + "\\n" + e.stack + "</pre>";
+}}
+</script>
+</body>
+</html>
+    """, width="100%", height="1520px")
+
+    # === Summary statistics ===
+    _mean_susp = round(_df_filtered["suspicion"].mean(), 1) if len(_df_filtered) > 0 else 0
+    _max_susp_entity = ""
+    _max_susp_val = 0
+    if len(_df_filtered) > 0:
+        _entity_susp = _df_filtered.groupby("sender_name")["suspicion"].mean()
+        if len(_entity_susp) > 0:
+            _max_susp_entity = _entity_susp.idxmax()
+            _max_susp_val = round(_entity_susp.max(), 1)
+
+    _top_cats = _df_filtered["category"].value_counts().head(4)
+    _cat_html = "".join([
+        f"<span style='display:inline-block;margin:1px 3px;padding:2px 7px;border-radius:4px;"
+        f"font-size:11px;background:{_category_colors.get(c, '#999')};color:white'>"
+        f"{c}: {n}</span>"
+        for c, n in _top_cats.items()
+    ])
+
+    _n_high = len(_df_filtered[_df_filtered["suspicion"] >= 7])
+    _n_entities = len(set(
+        _df_filtered["sender_name"].tolist() + _df_filtered["receiver_name"].tolist()
+    ))
+
+    _stats_panel = mo.md(f"""
+<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+<div style="text-align:center;padding:4px 12px;background:#f5f5f5;border-radius:6px;border:1px solid #e0e0e0">
+<div style="font-size:22px;font-weight:bold;color:#333">{_msg_count}</div>
+<div style="font-size:10px;color:#888">Messages</div></div>
+<div style="text-align:center;padding:4px 12px;background:#f5f5f5;border-radius:6px;border:1px solid #e0e0e0">
+<div style="font-size:22px;font-weight:bold;color:#333">{_n_entities}</div>
+<div style="font-size:10px;color:#888">Entities</div></div>
+<div style="text-align:center;padding:4px 12px;background:#f5f5f5;border-radius:6px;border:1px solid #e0e0e0">
+<div style="font-size:22px;font-weight:bold;color:{'#e6194b' if _mean_susp >= 5 else '#f58231' if _mean_susp >= 3 else '#3cb44b'}">{_mean_susp}</div>
+<div style="font-size:10px;color:#888">Mean Suspicion</div></div>
+<div style="text-align:center;padding:4px 12px;background:#f5f5f5;border-radius:6px;border:1px solid #e0e0e0">
+<div style="font-size:22px;font-weight:bold;color:#e6194b">{_n_high}</div>
+<div style="font-size:10px;color:#888">High Risk (≥7)</div></div>
+<div style="text-align:center;padding:4px 12px;background:#f5f5f5;border-radius:6px;border:1px solid #e0e0e0">
+<div style="font-size:14px;font-weight:bold;color:#333">{_max_susp_entity[:16]}</div>
+<div style="font-size:10px;color:#888">Most Suspicious (avg {_max_susp_val})</div></div>
+</div>
+<div style="margin-top:4px">{_cat_html}</div>
+""")
 
     mo.vstack([
-        circle_multiples,
-        mo.md(f"**Day {day_slider_sm.value + 1}** — {selected_day_sm}"),
-        day_slider_sm
+        mo.md(f"### Communication Intelligence Dashboard"),
+        mo.hstack([
+            mo.vstack([
+                mo.hstack([category_dropdown, entity_type_dropdown, entity_dropdown, suspicion_slider]),
+            ]),
+            _stats_panel,
+        ], justify="space-between", align="start"),
+        _dashboard,
     ])
+    return
+
+
+@app.cell
+def _(alt, df_intents, mo):
+    _intent_heatmap = alt.Chart(df_intents).mark_rect().encode(
+        x=alt.X("date_str:O", title="Date"),
+        y=alt.Y("category:N", title="Category"),
+        color=alt.Color("count():Q", scale=alt.Scale(scheme="blues"), title="Count"),
+        tooltip=["date_str", "category", "count()"]
+    ).properties(title="Category Frequency Over Time", width=700, height=350)
+    mo.vstack([mo.md("### Category Heatmap — Date x Category"), _intent_heatmap])
+    return
+
+
+@app.cell
+def _(alt, df_intents, mo):
+    _intent_hour = alt.Chart(df_intents).mark_bar().encode(
+        x=alt.X("hour_float:O", title="Hour of Day"),
+        y=alt.Y("count()", title="Count"),
+        color=alt.Color("category:N", title="Category"),
+    ).properties(title="Category Distribution by Hour", width=700, height=350)
+    mo.vstack([mo.md("### When do different categories occur?"), _intent_hour])
     return
 
 
