@@ -59,30 +59,27 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(
-    fig_timeline,
+    community_dd,
     intro_background,
     intro_questions,
     mo,
+    norm_topic_heatmap,
     q1_category_bar,
     q1_dashboard,
     q1_entity_bar,
-    q1_findings,
     q1_heatmap,
     q1_self_audit,
     q2_comm_network,
-    q2_entity_dist,
     q2_entity_profile,
-    q2_findings,
     q2_freq_matrix,
-    q2_hourly_heatmap,
-    q2_rel_dist,
     q2_rel_network,
     q2_rel_table,
     q2_stats,
-    q2_top_active,
+    q2b_community_graph,
+    q2b_members_table,
+    q2b_umap,
     q3_bipartite,
     q3_controls,
-    q3_findings,
     q3_force_network,
     q3_parallel,
     q3_pseudonym_bar,
@@ -93,6 +90,7 @@ def _(
     q4_evidence,
     q4_question,
     references,
+    topic_heatmap,
 ):
     _intro_page = mo.vstack([
         intro_background,
@@ -109,30 +107,38 @@ def _(
         "Interactive Dashboard": q1_dashboard,
         "Category Overview": _q1_charts,
         "Self-Message Audit": q1_self_audit,
-        "Findings": q1_findings,
     })
 
-    _q2_statistics = mo.vstack([
-        q2_stats,
-        mo.md("### Top Active Entities"),
-        q2_top_active,
-        mo.md("### Entity Type Distribution"),
-        q2_entity_dist,
-        mo.md("### Relationship Type Distribution"),
-        q2_rel_dist,
-        mo.md("### Communication Volume Over Time"),
-        fig_timeline,
-        mo.md("### Activity by Hour and Day of Week"),
-        q2_hourly_heatmap,
-    ])
 
-    _q2_page = mo.ui.tabs({
+
+    _q2a_page = mo.ui.tabs({
         "Communication Network": q2_comm_network,
         "Frequency Matrix": q2_freq_matrix,
         "Relationship Network": q2_rel_network,
         "Entity Profiles": mo.vstack([q2_entity_profile, q2_rel_table]),
-        "Statistics & Timeline": _q2_statistics,
-        "Findings": q2_findings,
+        "Statistics": q2_stats,
+    })
+
+    _q2b_community = mo.vstack([
+        community_dd,
+        q2b_members_table,
+        q2b_community_graph,
+    ])
+
+    _q2b_page = mo.ui.tabs({
+        "Community Detection": _q2b_community,
+        "Topic Analysis": q2b_umap,
+        "Community Topics": mo.vstack([
+            mo.md("### Topic Distribution per Community (Raw)"),
+            topic_heatmap,
+            mo.md("### Topic Distribution per Community (Normalized)"),
+            norm_topic_heatmap,
+        ]),
+    })
+
+    _q2_page = mo.ui.tabs({
+        "2A: Interactions": _q2a_page,
+        "2B: Communities & Topics": _q2b_page,
     })
 
     _q3_subtabs = mo.ui.tabs({
@@ -140,11 +146,10 @@ def _(
         "Bipartite Network": q3_bipartite,
         "Similarity Heatmap": q3_sim_heatmap,
         "Temporal Fingerprints": q3_temporal,
-        "Similarity Network": q3_force_network,
+        "Force-Directed Network": q3_force_network,
         "Sankey Diagram": q3_sankey,
         "Parallel Coordinates": q3_parallel,
         "Resolution Table": q3_resolution,
-        "Findings": q3_findings,
     })
 
     _q3_page = mo.vstack([
@@ -180,19 +185,15 @@ def _():
     import altair as alt
     import networkx as nx
     from collections import Counter, defaultdict
-    import plotly.express as px
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+    # Plotly removed — all visualizations now use D3.js
     import time
 
     return (
         alt,
         datetime,
         defaultdict,
-        go,
         json_graph,
         json_lib,
-        make_subplots,
         mo,
         np,
         nx,
@@ -2046,55 +2047,74 @@ def _(mo):
 
 
 @app.cell
-def _(all_entities, comm_matrix, go, heatmap_type_filter, np):
-    def build_heatmap_data(entity_types):
-        filtered = [eid for eid, e in all_entities.items()
-                   if e.get('sub_type') in entity_types]
+def _(all_entities, comm_matrix, heatmap_type_filter, json_lib, mo):
+    _filtered = {eid: e for eid, e in all_entities.items()
+                 if e.get('sub_type') in heatmap_type_filter.value}
+    _sorted_ids = sorted(_filtered, key=lambda x: (_filtered[x].get('sub_type',''), x))
 
-        filtered = sorted(filtered, key=lambda x: (all_entities[x].get('sub_type', ''), x))
+    _hm_rows = []
+    for _s in _sorted_ids:
+        for _r in _sorted_ids:
+            _v = len(comm_matrix[_s][_r]) if _s in comm_matrix and _r in comm_matrix[_s] else 0
+            if _v > 0:
+                _hm_rows.append({"s": _s, "r": _r, "v": _v,
+                    "st": _filtered[_s].get('sub_type','?')[0],
+                    "rt": _filtered[_r].get('sub_type','?')[0]})
 
-        n = len(filtered)
-        matrix = np.zeros((n, n))
+    _labels = [{"id": _id, "t": _filtered[_id].get('sub_type','?')[0]} for _id in _sorted_ids]
+    _hm_json = json_lib.dumps(_hm_rows)
+    _labels_json = json_lib.dumps(_labels)
+    _n = len(_sorted_ids)
 
-        for i, sender in enumerate(filtered):
-            for j, receiver in enumerate(filtered):
-                if sender in comm_matrix and receiver in comm_matrix[sender]:
-                    matrix[i][j] = len(comm_matrix[sender][receiver])
-
-        return filtered, matrix
-
-    entities_hm, matrix_hm = build_heatmap_data(heatmap_type_filter.value)
-
-    _labels_hm = []
-    for _eid in entities_hm:
-        _etype = all_entities[_eid].get('sub_type', '?')[0]
-        _labels_hm.append(f"[{_etype}] {_eid}")
-
-    _fig_heatmap = go.Figure(data=go.Heatmap(
-        z=matrix_hm,
-        x=_labels_hm,
-        y=_labels_hm,
-        colorscale='Blues',
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b> → <b>%{x}</b><br>Messages: %{z}<extra></extra>'
-    ))
-
-    _fig_heatmap.update_layout(
-        title=dict(
-            text='<b>Communication Frequency Matrix</b><br><sup>Row = Sender, Column = Receiver. [P]=Person, [V]=Vessel, [O]=Organization</sup>',
-            x=0.5
-        ),
-        xaxis=dict(title='Receiver', tickangle=45, tickfont=dict(size=8)),
-        yaxis=dict(title='Sender', tickfont=dict(size=8)),
-        height=800,
-        width=900,
-        margin=dict(l=150, r=50, t=100, b=150)
-    )
+    _freq_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing: border-box; }}
+body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:10px; overflow:auto; }}
+#stats {{ font-size:11px; color:#666; margin-bottom:8px; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px;
+  padding:8px 12px; font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15);
+  display:none; z-index:1000; }}
+</style></head><body>
+<div id="container"><div id="stats">{_n} entities &middot; Hover for message counts</div><div id="chart"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var data={_hm_json}, labels={_labels_json};
+var tooltip=d3.select("#tooltip");
+var n=labels.length, cellSize=Math.max(12, Math.min(22, 600/n));
+var margin={{top:10,right:30,bottom:120,left:120}};
+var W=n*cellSize+margin.left+margin.right, H=n*cellSize+margin.top+margin.bottom;
+var svg=d3.select("#chart").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g").attr("transform","translate("+margin.left+","+margin.top+")");
+var ids=labels.map(function(d){{return d.id;}});
+var x=d3.scaleBand().domain(ids).range([0,n*cellSize]).padding(.02);
+var y=d3.scaleBand().domain(ids).range([0,n*cellSize]).padding(.02);
+var maxV=d3.max(data,function(d){{return d.v;}})||1;
+var color=d3.scaleSequential(d3.interpolateBlues).domain([0,maxV]);
+g.selectAll("rect").data(data).enter().append("rect")
+  .attr("x",function(d){{return x(d.r);}}).attr("y",function(d){{return x(d.s);}})
+  .attr("width",x.bandwidth()).attr("height",y.bandwidth())
+  .attr("fill",function(d){{return color(d.v);}}).attr("rx",1)
+  .on("mouseover",function(event,d){{
+    d3.select(this).attr("stroke","#333").attr("stroke-width",1.5);
+    tooltip.style("display","block")
+      .html("<strong>["+d.st+"] "+d.s+"</strong> &rarr; <strong>["+d.rt+"] "+d.r+"</strong><br/>Messages: <b>"+d.v+"</b>")
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");
+  }}).on("mouseout",function(){{d3.select(this).attr("stroke","none");tooltip.style("display","none");}});
+g.append("g").attr("transform","translate(0,"+n*cellSize+")")
+  .call(d3.axisBottom(x)).selectAll("text").attr("transform","rotate(-45)").style("text-anchor","end").style("font-size","8px");
+g.append("g").call(d3.axisLeft(y)).selectAll("text").style("font-size","8px");
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+    """, width="100%", height=f"{max(500, _n*22+180)}px")
 
     q2_freq_matrix = mo.vstack([
         mo.md("### Communication Frequency Matrix"),
         heatmap_type_filter,
-        _fig_heatmap,
+        _freq_iframe,
     ])
     return (q2_freq_matrix,)
 
@@ -2528,104 +2548,100 @@ def _(
     all_entities_full,
     comm_matrix,
     entity_selector,
-    go,
-    make_subplots,
+    json_lib,
+    mo,
     pd,
     relationship_data,
 ):
     selected_entity = entity_selector.value
+    _sub_type = all_entities_full.get(selected_entity, {}).get('sub_type', 'Unknown')
 
     _sent_to = {}
     _received_from = {}
-
     if selected_entity in comm_matrix:
-        for _receiver, _comms in comm_matrix[selected_entity].items():
-            _sent_to[_receiver] = len(_comms)
-
-    for _sender in comm_matrix:
-        if selected_entity in comm_matrix[_sender]:
-            _received_from[_sender] = len(comm_matrix[_sender][selected_entity])
-
-    fig_entity_profile = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=(
-            f'Messages Sent by {selected_entity}',
-            f'Messages Received by {selected_entity}'
-        ),
-        specs=[[{'type': 'bar'}, {'type': 'bar'}]]
-    )
+        for _r, _c in comm_matrix[selected_entity].items():
+            _sent_to[_r] = len(_c)
+    for _s in comm_matrix:
+        if selected_entity in comm_matrix[_s]:
+            _received_from[_s] = len(comm_matrix[_s][selected_entity])
 
     _sent_data = sorted(_sent_to.items(), key=lambda x: -x[1])[:15]
-    if _sent_data:
-        _recipients, _counts = zip(*_sent_data)
-
-        def get_color(entity_id):
-            sub_type = all_entities_full.get(entity_id, {}).get('sub_type', 'Unknown')
-            color_map = {'Vessel': '#FF6B6B', 'Person': '#4ECDC4', 'Location': '#2ECC71',
-                        'Organization': '#95E1D3', 'Group': '#F38181'}
-            return color_map.get(sub_type, '#CCCCCC')
-
-        _colors_sent = [get_color(_r) for _r in _recipients]
-        fig_entity_profile.add_trace(
-            go.Bar(x=list(_recipients), y=list(_counts), marker_color=_colors_sent, name='Sent', showlegend=False),
-            row=1, col=1
-        )
-
     _recv_data = sorted(_received_from.items(), key=lambda x: -x[1])[:15]
-    if _recv_data:
-        _senders, _counts_r = zip(*_recv_data)
-        _colors_recv = [get_color(_s) for _s in _senders]
-        fig_entity_profile.add_trace(
-            go.Bar(x=list(_senders), y=list(_counts_r), marker_color=_colors_recv, name='Received', showlegend=False),
-            row=1, col=2
-        )
 
-    fig_entity_profile.update_layout(
-        title=dict(
-            text=f'<b>Communication Profile: {selected_entity}</b><br><sup>Type: {all_entities_full.get(selected_entity, {}).get("sub_type", "Unknown")} | Teal=Person, Red=Vessel, Green=Location, Mint=Org</sup>',
-            x=0.5
-        ),
-        showlegend=False,
-        height=450
-    )
+    _color_map = {'Vessel':'#FF6B6B','Person':'#4ECDC4','Location':'#2ECC71','Organization':'#95E1D3','Group':'#F38181'}
+    _sent_json = json_lib.dumps([{"name":k,"count":v,"type":all_entities_full.get(k,{}).get('sub_type','Unknown'),
+        "color":_color_map.get(all_entities_full.get(k,{}).get('sub_type',''),'#ccc')} for k,v in _sent_data])
+    _recv_json = json_lib.dumps([{"name":k,"count":v,"type":all_entities_full.get(k,{}).get('sub_type','Unknown'),
+        "color":_color_map.get(all_entities_full.get(k,{}).get('sub_type',''),'#ccc')} for k,v in _recv_data])
 
-    fig_entity_profile.update_xaxes(tickangle=45)
+    _profile_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ display:flex; gap:16px; width:100%; background:white; border:1px solid #ddd; border-radius:6px; padding:14px; }}
+.panel {{ flex:1; min-width:0; }}
+.panel-title {{ font-size:13px; font-weight:bold; color:#444; margin-bottom:6px; border-bottom:1px solid #eee; padding-bottom:4px; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px;
+  padding:8px 12px; font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15);
+  display:none; z-index:1000; }}
+.bar:hover {{ opacity:.8; }}
+</style></head><body>
+<div id="container"><div class="panel"><div class="panel-title">Messages Sent by {selected_entity}</div><div id="sent"></div></div>
+<div class="panel"><div class="panel-title">Messages Received by {selected_entity}</div><div id="recv"></div></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var sentData={_sent_json}, recvData={_recv_json};
+var tooltip=d3.select("#tooltip");
+function drawBars(sel, data) {{
+  if(!data.length) {{ d3.select(sel).append("div").style("color","#aaa").style("padding","20px").text("No messages found"); return; }}
+  var margin={{top:5,right:50,bottom:5,left:110}}, barH=22;
+  var W=400, H=data.length*barH+margin.top+margin.bottom;
+  var svg=d3.select(sel).append("svg").attr("width",W).attr("height",H);
+  var g=svg.append("g").attr("transform","translate("+margin.left+","+margin.top+")");
+  var x=d3.scaleLinear().domain([0,d3.max(data,function(d){{return d.count;}})||1]).range([0,W-margin.left-margin.right]);
+  var y=d3.scaleBand().domain(data.map(function(d){{return d.name;}})).range([0,H-margin.top-margin.bottom]).padding(.12);
+  g.selectAll("rect").data(data).enter().append("rect").attr("class","bar")
+    .attr("x",0).attr("y",function(d){{return y(d.name);}}).attr("height",y.bandwidth())
+    .attr("width",function(d){{return x(d.count);}}).attr("fill",function(d){{return d.color;}}).attr("rx",3)
+    .on("mouseover",function(event,d){{
+      tooltip.style("display","block").html("<strong>"+d.name+"</strong><br/>"+d.type+"<br/>Messages: <b>"+d.count+"</b>")
+        .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");
+    }}).on("mouseout",function(){{tooltip.style("display","none");}});
+  g.selectAll(".lbl").data(data).enter().append("text").attr("x",-5)
+    .attr("y",function(d){{return y(d.name)+y.bandwidth()/2;}}).attr("dy",".35em")
+    .attr("text-anchor","end").style("font-size","10px").style("fill","#333")
+    .text(function(d){{return d.name.length>14?d.name.substring(0,14)+"…":d.name;}});
+  g.selectAll(".cnt").data(data).enter().append("text")
+    .attr("x",function(d){{return x(d.count)+4;}}).attr("y",function(d){{return y(d.name)+y.bandwidth()/2;}})
+    .attr("dy",".35em").style("font-size","10px").style("font-weight","bold").style("fill","#333")
+    .text(function(d){{return d.count;}});
+}}
+drawBars("#sent",sentData); drawBars("#recv",recvData);
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+    """, width="100%", height=f"{max(300, max(len(_sent_data),len(_recv_data))*24+60)}px")
 
     _entity_rels = [_r for _r in relationship_data
                   if _r['entity1'] == selected_entity or _r['entity2'] == selected_entity]
-
     _rel_summary_data = []
     for _r in _entity_rels:
         _other = _r['entity2'] if _r['entity1'] == selected_entity else _r['entity1']
         _direction = '↔' if _r['bidirectional'] else ('→' if _r['entity1'] == selected_entity else '←')
-        _rel_summary_data.append({
-            'Relationship': _r['type'],
-            'Direction': _direction,
-            'Other Entity': _other,
-            'Other Type': all_entities_full.get(_other, {}).get('sub_type', 'Unknown')
-        })
+        _rel_summary_data.append({'Relationship': _r['type'], 'Direction': _direction,
+            'Other Entity': _other, 'Other Type': all_entities_full.get(_other, {}).get('sub_type', 'Unknown')})
 
-    rel_df = pd.DataFrame(_rel_summary_data) if _rel_summary_data else pd.DataFrame(columns=['Relationship', 'Direction', 'Other Entity', 'Other Type'])
+    rel_df = pd.DataFrame(_rel_summary_data) if _rel_summary_data else pd.DataFrame(columns=['Relationship','Direction','Other Entity','Other Type'])
 
-    return fig_entity_profile, rel_df, selected_entity
-
-
-@app.cell
-def _(entity_selector, fig_entity_profile, mo, selected_entity):
     q2_entity_profile = mo.vstack([
-        mo.md("### Entity Communication Profile"),
+        mo.md(f"### Entity Communication Profile: {selected_entity} ({_sub_type})"),
         entity_selector,
-        fig_entity_profile,
-        mo.md(f"""
-### Formal Relationships of {selected_entity}
-
-The table below shows all formal relationships that **{selected_entity}** has with other entities. The direction indicates:
-- **↔** for bidirectional relationships (Colleagues, Friends)
-- **→** for outgoing relationships (the entity is the source)
-- **←** for incoming relationships (the entity is the target)
-        """),
+        _profile_iframe,
+        mo.md(f"### Formal Relationships of {selected_entity}"),
     ])
-    return (q2_entity_profile,)
+    return q2_entity_profile, rel_df, selected_entity
 
 
 @app.cell
@@ -2637,200 +2653,167 @@ def _(mo, rel_df):
     return (q2_rel_table,)
 
 
-@app.cell(hide_code=True)
-def _():
-    # Timeline header moved to tab
-    return
-
-
-
 @app.cell
-def _(comm_events, go, pd):
-    _timeline_data = []
-    for _comm in comm_events:
-        _ts = _comm.get('timestamp', '')
+def _(all_entities, comm_events, json_lib, mo, pd, relationship_data):
+    # Build all statistics data
+    _tl = []
+    for _c in comm_events:
+        _ts = _c.get('timestamp','')
         if _ts:
-            _timeline_data.append({
-                'timestamp': pd.to_datetime(_ts),
-                'comm_id': _comm['id']
-            })
-
-    timeline_df = pd.DataFrame(_timeline_data)
+            _tl.append({'timestamp': pd.to_datetime(_ts), 'id': _c['id']})
+    timeline_df = pd.DataFrame(_tl)
     timeline_df['date'] = timeline_df['timestamp'].dt.date
     timeline_df['hour'] = timeline_df['timestamp'].dt.hour
     timeline_df['day_name'] = timeline_df['timestamp'].dt.day_name()
 
-    daily_counts = timeline_df.groupby('date').size().reset_index(name='count')
-    daily_counts['date'] = pd.to_datetime(daily_counts['date'])
+    _daily = timeline_df.groupby('date').size().reset_index(name='count')
+    _daily['date'] = _daily['date'].astype(str)
+    _daily_json = json_lib.dumps(_daily.to_dict(orient='records'))
 
-    fig_timeline = go.Figure()
+    _hourly = timeline_df.groupby(['day_name','hour']).size().reset_index(name='count')
+    _hourly_json = json_lib.dumps(_hourly.to_dict(orient='records'))
 
-    fig_timeline.add_trace(go.Bar(
-        x=daily_counts['date'],
-        y=daily_counts['count'],
-        marker_color='#3498DB',
-        name='Daily Messages',
-        hovertemplate='<b>%{x|%Y-%m-%d}</b><br>Messages: %{y}<extra></extra>'
-    ))
-
-    _ = fig_timeline.update_layout(
-        title=dict(
-            text='<b>Communication Volume Over Time</b><br><sup>Daily message counts across the two-week observation period (Oct 1-14, 2040)</sup>',
-            x=0.5
-        ),
-        xaxis_title='Date',
-        yaxis_title='Number of Messages',
-        height=400,
-        showlegend=False,
-        xaxis=dict(tickformat='%b %d', tickangle=45),
-        plot_bgcolor='#fafafa'
-    )
-
-    return fig_timeline, timeline_df
-
-
-@app.cell
-def _(go, timeline_df):
-    _hourly_daily = timeline_df.groupby(['day_name', 'hour']).size().reset_index(name='count')
-
-    _day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-
-    _pivot_data = _hourly_daily.pivot(index='day_name', columns='hour', values='count').fillna(0)
-    _pivot_data = _pivot_data.reindex(columns=range(24), fill_value=0)
-
-    fig_hourly_heatmap = go.Figure(data=go.Heatmap(
-        z=_pivot_data.values,
-        x=[f'{h:02d}:00' for h in range(24)],
-        y=_day_order,
-        colorscale='Blues',
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b> at <b>%{x}</b><br>Messages: %{z}<extra></extra>'
-    ))
-
-    fig_hourly_heatmap.update_layout(
-        title=dict(
-            text='<b>Communication Activity by Hour and Day of Week</b><br><sup>Darker cells indicate more communication activity</sup>',
-            x=0.5
-        ),
-        xaxis_title='Hour of Day',
-        yaxis_title='Day of Week',
-        height=400,
-        xaxis=dict(tickangle=45, tickfont=dict(size=9)),
-        yaxis=dict(tickfont=dict(size=10))
-    )
-
-    q2_hourly_heatmap = fig_hourly_heatmap
-    return (q2_hourly_heatmap,)
-
-
-@app.cell(hide_code=True)
-def _():
-    # Statistics header moved to tab
-    return
-
-
-
-@app.cell
-def _(all_entities, comm_events, mo, relationship_data):
-    _total_entities = len(all_entities)
-    _total_comms = len(comm_events)
-    _total_rels = len(relationship_data)
-
-    q2_stats = mo.hstack([
-        mo.stat(value=_total_entities, label="Total Entities", bordered=True),
-        mo.stat(value=_total_comms, label="Communications", bordered=True),
-        mo.stat(value=_total_rels, label="Formal Relationships", bordered=True),
-    ], justify='center', gap=2)
-    return (q2_stats,)
-
-
-@app.cell
-def _(all_entities_full, comm_matrix, mo, pd):
-    _sent_counts = {}
-    _recv_counts = {}
-
-    for _sender_k in comm_matrix:
-        for _receiver_k, _comms_k in comm_matrix[_sender_k].items():
-            _sent_counts[_sender_k] = _sent_counts.get(_sender_k, 0) + len(_comms_k)
-            _recv_counts[_receiver_k] = _recv_counts.get(_receiver_k, 0) + len(_comms_k)
-
-    _total_activity = {_k: _sent_counts.get(_k, 0) + _recv_counts.get(_k, 0)
-                      for _k in set(_sent_counts) | set(_recv_counts)}
-
-    _top_active = sorted(_total_activity.items(), key=lambda x: -x[1])[:15]
-
-    top_active_df = pd.DataFrame(_top_active, columns=['Entity', 'Total Messages'])
-    top_active_df['Type'] = top_active_df['Entity'].apply(lambda x: all_entities_full.get(x, {}).get('sub_type', 'Unknown'))
-    top_active_df['Sent'] = top_active_df['Entity'].apply(lambda x: _sent_counts.get(x, 0))
-    top_active_df['Received'] = top_active_df['Entity'].apply(lambda x: _recv_counts.get(x, 0))
-    top_active_df = top_active_df[['Entity', 'Type', 'Sent', 'Received', 'Total Messages']]
-
-    q2_top_active = mo.ui.table(top_active_df)
-    return (q2_top_active,)
-
-
-@app.cell
-def _(all_entities, go):
     _type_counts = {}
-    for _eid, _entity in all_entities.items():
-        _etype = _entity.get('sub_type', 'Unknown')
-        _type_counts[_etype] = _type_counts.get(_etype, 0) + 1
+    for _e in all_entities.values():
+        _t = _e.get('sub_type','Unknown')
+        _type_counts[_t] = _type_counts.get(_t, 0) + 1
+    _types_json = json_lib.dumps([{"type":k,"count":v} for k,v in _type_counts.items()])
 
-    fig_entity_distribution = go.Figure(data=[go.Pie(
-        labels=list(_type_counts.keys()),
-        values=list(_type_counts.values()),
-        hole=0.4,
-        marker_colors=['#4ECDC4', '#FF6B6B', '#95E1D3', '#F38181'],
-        textinfo='label+percent',
-        textposition='outside',
-        hovertemplate='<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
-    )])
+    _rel_counts = {}
+    for _r in relationship_data:
+        _t = _r['type']
+        _rel_counts[_t] = _rel_counts.get(_t, 0) + 1
+    _rels_sorted = sorted(_rel_counts.items(), key=lambda x: -x[1])
+    _rels_json = json_lib.dumps([{"type":k,"count":v} for k,v in _rels_sorted])
 
-    fig_entity_distribution.update_layout(
-        title=dict(
-            text='<b>Entity Type Distribution</b><br><sup>Breakdown of actors in the knowledge graph</sup>',
-            x=0.5
-        ),
-        height=400,
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=-0.2, xanchor='center', x=0.5)
-    )
+    _n_ent = len(all_entities)
+    _n_comm = len(comm_events)
+    _n_rel = len(relationship_data)
 
-    q2_entity_dist = fig_entity_distribution
-    return (q2_entity_dist,)
+    _stats_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:14px; }}
+.stat-row {{ display:flex; gap:12px; margin-bottom:8px; }}
+.stat-box {{ text-align:center; padding:6px 14px; background:#f5f5f5; border-radius:5px; border:1px solid #eee; }}
+.stat-val {{ font-size:20px; font-weight:bold; color:#333; }}
+.stat-lbl {{ font-size:9px; color:#888; }}
+.grid {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+.section {{ border:1px solid #eee; border-radius:6px; padding:10px; }}
+.stitle {{ font-size:12px; font-weight:bold; color:#444; margin-bottom:6px; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px;
+  padding:8px 12px; font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15);
+  display:none; z-index:1000; }}
+</style></head><body>
+<div id="container">
+<div class="stat-row">
+  <div class="stat-box"><div class="stat-val">{_n_ent}</div><div class="stat-lbl">Entities</div></div>
+  <div class="stat-box"><div class="stat-val">{_n_comm}</div><div class="stat-lbl">Communications</div></div>
+  <div class="stat-box"><div class="stat-val">{_n_rel}</div><div class="stat-lbl">Relationships</div></div>
+</div>
+<div class="grid">
+  <div class="section"><div class="stitle">Communication Volume Over Time</div><div id="timeline"></div></div>
+  <div class="section"><div class="stitle">Activity by Hour &amp; Day</div><div id="hourly"></div></div>
+  <div class="section"><div class="stitle">Entity Type Distribution</div><div id="types"></div></div>
+  <div class="section"><div class="stitle">Relationship Type Distribution</div><div id="rels"></div></div>
+</div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var daily={_daily_json}, hourly={_hourly_json}, types={_types_json}, rels={_rels_json};
+var tooltip=d3.select("#tooltip");
+var tc={{"Person":"#4ECDC4","Vessel":"#FF6B6B","Organization":"#95E1D3","Group":"#F38181"}};
+// Timeline bar
+(function(){{
+  var m={{top:5,right:10,bottom:50,left:35}},W=380,H=200;
+  var svg=d3.select("#timeline").append("svg").attr("width",W).attr("height",H);
+  var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+  var x=d3.scaleBand().domain(daily.map(function(d){{return d.date;}})).range([0,W-m.left-m.right]).padding(.15);
+  var y=d3.scaleLinear().domain([0,d3.max(daily,function(d){{return d.count;}})]).range([H-m.top-m.bottom,0]);
+  g.selectAll("rect").data(daily).enter().append("rect").attr("x",function(d){{return x(d.date);}})
+    .attr("y",function(d){{return y(d.count);}}).attr("width",x.bandwidth())
+    .attr("height",function(d){{return H-m.top-m.bottom-y(d.count);}}).attr("fill","#3498DB").attr("rx",2)
+    .on("mouseover",function(event,d){{tooltip.style("display","block").html("<b>"+d.date+"</b><br/>"+d.count+" messages")
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");}})
+    .on("mouseout",function(){{tooltip.style("display","none");}});
+  g.append("g").attr("transform","translate(0,"+(H-m.top-m.bottom)+")").call(d3.axisBottom(x))
+    .selectAll("text").attr("transform","rotate(-40)").style("text-anchor","end").style("font-size","8px");
+  g.append("g").call(d3.axisLeft(y).ticks(5)).selectAll("text").style("font-size","8px");
+}})();
+// Hourly heatmap
+(function(){{
+  var days=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  var m={{top:5,right:10,bottom:10,left:70}},cW=14,cH=22;
+  var W=24*cW+m.left+m.right, H=days.length*cH+m.top+m.bottom;
+  var svg=d3.select("#hourly").append("svg").attr("width",W).attr("height",H);
+  var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+  var x=d3.scaleBand().domain(d3.range(24)).range([0,24*cW]).padding(.05);
+  var yS=d3.scaleBand().domain(days).range([0,days.length*cH]).padding(.05);
+  var maxV=d3.max(hourly,function(d){{return d.count;}})||1;
+  var color=d3.scaleSequential(d3.interpolateBlues).domain([0,maxV]);
+  g.selectAll("rect").data(hourly).enter().append("rect")
+    .attr("x",function(d){{return x(d.hour);}}).attr("y",function(d){{return yS(d.day_name);}})
+    .attr("width",x.bandwidth()).attr("height",yS.bandwidth()).attr("fill",function(d){{return color(d.count);}}).attr("rx",1)
+    .on("mouseover",function(event,d){{tooltip.style("display","block").html("<b>"+d.day_name+"</b> "+d.hour+":00<br/>"+d.count+" messages")
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");}})
+    .on("mouseout",function(){{tooltip.style("display","none");}});
+  g.append("g").call(d3.axisLeft(yS)).selectAll("text").style("font-size","9px");
+}})();
+// Entity type donut
+(function(){{
+  var W=380,H=200,r=Math.min(W,H)/2-10;
+  var svg=d3.select("#types").append("svg").attr("width",W).attr("height",H);
+  var g=svg.append("g").attr("transform","translate("+W/2+","+H/2+")");
+  var pie=d3.pie().value(function(d){{return d.count;}});
+  var arc=d3.arc().innerRadius(r*0.5).outerRadius(r);
+  g.selectAll("path").data(pie(types)).enter().append("path").attr("d",arc)
+    .attr("fill",function(d){{return tc[d.data.type]||"#ccc";}}).attr("stroke","white").attr("stroke-width",2)
+    .on("mouseover",function(event,d){{tooltip.style("display","block")
+      .html("<b>"+d.data.type+"</b><br/>Count: "+d.data.count)
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");}})
+    .on("mouseout",function(){{tooltip.style("display","none");}});
+  var label=d3.arc().innerRadius(r*0.8).outerRadius(r*0.8);
+  g.selectAll("text").data(pie(types)).enter().append("text")
+    .attr("transform",function(d){{return "translate("+label.centroid(d)+")";}})
+    .attr("text-anchor","middle").style("font-size","10px").style("fill","#333")
+    .text(function(d){{return d.data.type;}});
+}})();
+// Relationship type bars
+(function(){{
+  var m={{top:5,right:30,bottom:5,left:90}},barH=22,W=380;
+  var H=rels.length*barH+m.top+m.bottom;
+  var svg=d3.select("#rels").append("svg").attr("width",W).attr("height",H);
+  var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+  var colors=["#F39C12","#3498DB","#2ECC71","#E74C3C","#9B59B6","#C0392B","#1ABC9C"];
+  var x=d3.scaleLinear().domain([0,d3.max(rels,function(d){{return d.count;}})||1]).range([0,W-m.left-m.right]);
+  var y=d3.scaleBand().domain(rels.map(function(d){{return d.type;}})).range([0,H-m.top-m.bottom]).padding(.12);
+  g.selectAll("rect").data(rels).enter().append("rect")
+    .attr("x",0).attr("y",function(d){{return y(d.type);}}).attr("height",y.bandwidth())
+    .attr("width",function(d){{return x(d.count);}}).attr("fill",function(d,i){{return colors[i%colors.length];}}).attr("rx",3)
+    .on("mouseover",function(event,d){{tooltip.style("display","block").html("<b>"+d.type+"</b><br/>Count: "+d.count)
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");}})
+    .on("mouseout",function(){{tooltip.style("display","none");}});
+  g.selectAll(".lbl").data(rels).enter().append("text").attr("x",-4)
+    .attr("y",function(d){{return y(d.type)+y.bandwidth()/2;}}).attr("dy",".35em")
+    .attr("text-anchor","end").style("font-size","10px").text(function(d){{return d.type;}});
+  g.selectAll(".cnt").data(rels).enter().append("text")
+    .attr("x",function(d){{return x(d.count)+4;}}).attr("y",function(d){{return y(d.type)+y.bandwidth()/2;}})
+    .attr("dy",".35em").style("font-size","10px").style("font-weight","bold").text(function(d){{return d.count;}});
+}})();
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"\\n"+e.stack+"</pre>"; }}
+</script></body></html>
+    """, width="100%", height="680px")
 
-
-@app.cell
-def _(go, relationship_data):
-    _rel_type_counts = {}
-    for _rel in relationship_data:
-        _rtype = _rel['type']
-        _rel_type_counts[_rtype] = _rel_type_counts.get(_rtype, 0) + 1
-
-    _sorted_rel_types = sorted(_rel_type_counts.items(), key=lambda x: -x[1])
-
-    fig_rel_distribution = go.Figure(data=[go.Bar(
-        x=[_v for _k, _v in _sorted_rel_types],
-        y=[_k for _k, _v in _sorted_rel_types],
-        orientation='h',
-        marker_color=['#F39C12', '#3498DB', '#2ECC71', '#E74C3C', '#9B59B6', '#C0392B', '#1ABC9C'][:len(_sorted_rel_types)],
-        hovertemplate='<b>%{y}</b><br>Count: %{x}<extra></extra>'
-    )])
-
-    fig_rel_distribution.update_layout(
-        title=dict(
-            text='<b>Relationship Type Distribution</b><br><sup>Count of each relationship type in the knowledge graph</sup>',
-            x=0.5
-        ),
-        xaxis_title='Count',
-        yaxis_title='Relationship Type',
-        height=400,
-        yaxis=dict(autorange='reversed'),
-        plot_bgcolor='#fafafa'
-    )
-
-    q2_rel_dist = fig_rel_distribution
-    return (q2_rel_dist,)
+    q2_stats = _stats_iframe
+    q2_hourly_heatmap = mo.md("")
+    q2_entity_dist = mo.md("")
+    q2_rel_dist = mo.md("")
+    fig_timeline = mo.md("")
+    q2_top_active = mo.md("")
+    return fig_timeline, q2_entity_dist, q2_hourly_heatmap, q2_rel_dist, q2_stats, q2_top_active, timeline_df
 
 
 @app.cell(hide_code=True)
@@ -2950,90 +2933,81 @@ def _(G, community_dd, community_labels, community_list, mo, pd):
         })
 
     _df_members = pd.DataFrame(_rows).sort_values(["sub_type", "node"])
-    _ = mo.ui.table(_df_members)
-    return
+    q2b_members_table = mo.ui.table(_df_members)
+    return (q2b_members_table,)
 
 
 @app.cell
-def _(E, G, alt, community_dd, community_labels, community_list, nx, pd):
-    def _():
-        idx = community_labels.index(community_dd.value)
-        members = community_list[idx]
+def _(E, G, community_dd, community_labels, community_list, json_lib, mo, nx):
+    _idx = community_labels.index(community_dd.value)
+    _members = community_list[_idx]
+    _H = E.subgraph(_members).copy()
 
-        H = E.subgraph(members).copy()
+    _color_map = {"Person":"#4ECDC4","Vessel":"#FF6B6B","Organization":"#95E1D3","Group":"#F38181"}
+    _nodes_d = [{"id":n,"sub_type":G.nodes[n].get("sub_type","Unknown"),
+        "color":_color_map.get(G.nodes[n].get("sub_type",""),"#ccc")} for n in _H.nodes()]
+    _edges_d = [{"source":u,"target":v,"weight":float(d.get("weight",1))} for u,v,d in _H.edges(data=True)]
 
-        pos = nx.spring_layout(H, seed=42)
+    _nj = json_lib.dumps(_nodes_d)
+    _ej = json_lib.dumps(_edges_d)
+    _nn = len(_nodes_d)
+    _ne = len(_edges_d)
+    _title = community_dd.value
 
-        nodes_df = pd.DataFrame(
-            [
-                {
-                    "node": n,
-                    "x": float(pos[n][0]),
-                    "y": float(pos[n][1]),
-                    "sub_type": G.nodes[n].get("sub_type"),
-                }
-                for n in H.nodes()
-            ]
-        )
+    _comm_graph_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }}
+body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ width:100%; height:500px; background:white; border:1px solid #ddd; border-radius:6px; position:relative; overflow:hidden; }}
+#stats {{ position:absolute; top:8px; left:10px; font-size:11px; color:#666; background:rgba(255,255,255,.9);
+  padding:3px 8px; border-radius:4px; border:1px solid #eee; z-index:10; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px;
+  padding:8px 12px; font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15);
+  display:none; z-index:1000; }}
+</style></head><body>
+<div id="container"><div id="stats">{_title}: {_nn} nodes &middot; {_ne} edges</div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var nodes={_nj}, edges={_ej};
+var tooltip=d3.select("#tooltip");
+var el=document.getElementById("container"), W=el.offsetWidth||700, H=500;
+var svg=d3.select("#container").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g");
+svg.call(d3.zoom().scaleExtent([.2,4]).on("zoom",function(event){{g.attr("transform",event.transform);}}));
+var sim=d3.forceSimulation(nodes)
+  .force("link",d3.forceLink(edges).id(function(d){{return d.id;}}).distance(80).strength(.3))
+  .force("charge",d3.forceManyBody().strength(-200))
+  .force("center",d3.forceCenter(W/2,H/2))
+  .force("collide",d3.forceCollide(18));
+var link=g.append("g").selectAll("line").data(edges).enter().append("line")
+  .attr("stroke","#bbb").attr("stroke-width",function(d){{return Math.max(1,Math.min(d.weight*.4,6));}}).attr("opacity",.4);
+var node=g.append("g").selectAll("g").data(nodes).enter().append("g").style("cursor","pointer")
+  .call(d3.drag().on("start",function(ev,d){{if(!ev.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}})
+    .on("drag",function(ev,d){{d.fx=ev.x;d.fy=ev.y;}})
+    .on("end",function(ev,d){{if(!ev.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}}));
+node.append("circle").attr("r",10).attr("fill",function(d){{return d.color;}}).attr("stroke","#555").attr("stroke-width",1.2);
+node.append("text").attr("dx",13).attr("dy",4).style("font-size","10px").style("fill","#333").text(function(d){{return d.id;}});
+node.on("mouseover",function(event,d){{
+  link.attr("opacity",function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id||t===d.id)?.8:.05;}});
+  node.select("circle").attr("opacity",function(n){{if(n.id===d.id)return 1;
+    return edges.some(function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id&&t===n.id)||(t===d.id&&s===n.id);}})?1:.15;}});
+  tooltip.style("display","block").html("<strong>"+d.id+"</strong><br/>"+d.sub_type)
+    .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");
+}}).on("mouseout",function(){{link.attr("opacity",.4);node.select("circle").attr("opacity",1);tooltip.style("display","none");}});
+sim.on("tick",function(){{
+  link.attr("x1",function(d){{return d.source.x;}}).attr("y1",function(d){{return d.source.y;}})
+    .attr("x2",function(d){{return d.target.x;}}).attr("y2",function(d){{return d.target.y;}});
+  node.attr("transform",function(d){{return "translate("+d.x+","+d.y+")";}});
+}});
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+    """, width="100%", height="520px")
 
-        edges_df = pd.DataFrame(
-            [
-                {
-                    "source": u,
-                    "target": v,
-                    "x": float(pos[u][0]),
-                    "y": float(pos[u][1]),
-                    "x2": float(pos[v][0]),
-                    "y2": float(pos[v][1]),
-                    "weight": float(d.get("weight", 1)),
-                }
-                for u, v, d in H.edges(data=True)
-            ]
-        )
-
-        edges_layer = (
-            alt.Chart(edges_df)
-            .mark_rule(opacity=0.25)
-            .encode(
-                x="x:Q", y="y:Q",
-                x2="x2:Q", y2="y2:Q",
-                strokeWidth=alt.StrokeWidth("weight:Q", legend=None),
-                tooltip=["source:N", "target:N", "weight:Q"],
-            )
-        )
-
-        nodes_layer = (
-            alt.Chart(nodes_df)
-            .mark_circle(size=120)
-            .encode(
-                x="x:Q", y="y:Q",
-                tooltip=["node:N", "sub_type:N"],
-                color="sub_type:N",
-            )
-        )
-
-        labels_layer = (
-            alt.Chart(nodes_df)
-            .mark_text(align="left", dx=7, dy=-7, fontSize=11)
-            .encode(
-                x="x:Q", y="y:Q",
-                text="node:N",
-            )
-        )
-
-        chart = (
-            (edges_layer + nodes_layer + labels_layer)
-            .properties(
-                width=800,
-                height=600,
-                title=f"{community_dd.value} — {H.number_of_edges()} edges",
-            )
-            .configure_axis(grid=False, domain=False, ticks=False, labels=False)
-        )
-        return chart
-
-    _ = _()
-    return
+    q2b_community_graph = _comm_graph_iframe
+    return (q2b_community_graph,)
 
 
 @app.cell(hide_code=True)
@@ -3060,18 +3034,185 @@ def _(pd):
 
 
 @app.cell
+def _(json_lib, mo, plot_df):
+    # Build scatter data for D3
+    _topics_unique = sorted(plot_df['topic_name'].dropna().unique().tolist())
+    _scatter_data = []
+    for _, _row in plot_df.iterrows():
+        _scatter_data.append({
+            "x": round(float(_row.get('x', 0)), 3),
+            "y": round(float(_row.get('y', 0)), 3),
+            "topic": str(_row.get('topic_name', 'Unknown')),
+            "source": str(_row.get('source', '')),
+            "target": str(_row.get('target', '')),
+            "content": str(_row.get('content_short', str(_row.get('content', ''))[:100])),
+        })
+
+    _scatter_json = json_lib.dumps(_scatter_data)
+    _topics_json = json_lib.dumps(_topics_unique)
+    _n_docs = len(_scatter_data)
+    _n_topics = len(_topics_unique)
+
+    q2b_umap = mo.iframe(f"""
+<!DOCTYPE html><html><head>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing: border-box; }}
+body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ width:100%; height:620px; background:white; border:1px solid #ddd;
+             border-radius:6px; position:relative; overflow:hidden; }}
+#stats {{
+    position:absolute; top:8px; left:10px; font-size:11px; color:#666;
+    background:rgba(255,255,255,.9); padding:4px 10px; border-radius:4px;
+    border:1px solid #eee; z-index:10;
+}}
+#legend {{
+    position:absolute; top:8px; right:12px; font-size:10px;
+    background:rgba(255,255,255,.92); border:1px solid #ddd;
+    border-radius:6px; padding:8px 10px; max-height:580px; overflow-y:auto; z-index:10;
+    max-width:200px;
+}}
+.leg-row {{ display:flex; align-items:center; gap:5px; margin:2px 0; cursor:pointer; }}
+.leg-row:hover {{ background:#f5f5f5; }}
+.leg-swatch {{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }}
+.leg-label {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.tooltip {{
+    position:fixed; background:white; border:1px solid #ccc; border-radius:6px;
+    padding:8px 12px; font-size:12px; pointer-events:none;
+    box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none;
+    max-width:320px; z-index:1000;
+}}
+#hint {{
+    position:absolute; bottom:6px; left:10px; font-size:10px; color:#aaa;
+}}
+</style></head><body>
+<div id="container">
+    <div id="stats">{_n_docs} documents &middot; {_n_topics} topics</div>
+    <div id="legend"></div>
+    <div id="hint">Scroll to zoom &middot; Drag to pan &middot; Click legend to filter</div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+
+var data = {_scatter_json};
+var topicNames = {_topics_json};
+var tooltip = d3.select("#tooltip");
+
+var el = document.getElementById("container");
+var W = el.offsetWidth || 900, H = 620;
+var margin = {{top: 40, right: 220, bottom: 30, left: 40}};
+var plotW = W - margin.left - margin.right;
+var plotH = H - margin.top - margin.bottom;
+
+var svg = d3.select("#container").append("svg").attr("width", W).attr("height", H);
+var g = svg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+// Zoom on the plot area
+var zoomG = g.append("g");
+svg.call(d3.zoom().scaleExtent([0.5, 10]).on("zoom", function(event) {{
+    zoomG.attr("transform", event.transform);
+}}));
+
+// Clip path
+svg.append("defs").append("clipPath").attr("id", "plot-clip")
+    .append("rect").attr("width", plotW).attr("height", plotH);
+zoomG.attr("clip-path", "url(#plot-clip)");
+
+var color = d3.scaleOrdinal(d3.schemeTableau10).domain(topicNames);
+
+var xExtent = d3.extent(data, function(d) {{ return d.x; }});
+var yExtent = d3.extent(data, function(d) {{ return d.y; }});
+var xPad = (xExtent[1] - xExtent[0]) * 0.05;
+var yPad = (yExtent[1] - yExtent[0]) * 0.05;
+var x = d3.scaleLinear().domain([xExtent[0]-xPad, xExtent[1]+xPad]).range([0, plotW]);
+var y = d3.scaleLinear().domain([yExtent[0]-yPad, yExtent[1]+yPad]).range([plotH, 0]);
+
+// Draw dots
+var dots = zoomG.selectAll("circle").data(data).enter().append("circle")
+    .attr("cx", function(d) {{ return x(d.x); }})
+    .attr("cy", function(d) {{ return y(d.y); }})
+    .attr("r", 4.5)
+    .attr("fill", function(d) {{ return color(d.topic); }})
+    .attr("opacity", 0.7)
+    .attr("stroke", "white")
+    .attr("stroke-width", 0.5);
+
+dots.on("mouseover", function(event, d) {{
+    d3.select(this).attr("r", 7).attr("opacity", 1).attr("stroke", "#333").attr("stroke-width", 1.5);
+    tooltip.style("display", "block")
+        .html("<div style='font-weight:bold;color:" + color(d.topic) + "'>" + d.topic + "</div>"
+            + "<div style='margin:3px 0'><b>" + d.source + "</b> &rarr; <b>" + d.target + "</b></div>"
+            + "<div style='font-size:11px;color:#555;max-width:280px'>" + d.content + "</div>")
+        .style("left", (event.clientX + 14) + "px")
+        .style("top", (event.clientY - 20) + "px");
+}}).on("mouseout", function() {{
+    d3.select(this).attr("r", 4.5).attr("opacity", 0.7).attr("stroke", "white").attr("stroke-width", 0.5);
+    tooltip.style("display", "none");
+}});
+
+// Legend with toggle
+var activeTopics = new Set(topicNames);
+var legend = d3.select("#legend");
+legend.append("div").style("font-weight", "bold").style("margin-bottom", "4px").text("Topics");
+
+topicNames.forEach(function(t) {{
+    var row = legend.append("div").attr("class", "leg-row").on("click", function() {{
+        if (activeTopics.has(t)) {{ activeTopics.delete(t); }} else {{ activeTopics.add(t); }}
+        d3.select(this).select(".leg-swatch").style("opacity", activeTopics.has(t) ? 1 : 0.2);
+        d3.select(this).select(".leg-label").style("color", activeTopics.has(t) ? "#333" : "#bbb");
+        dots.attr("display", function(d) {{ return activeTopics.has(d.topic) ? null : "none"; }});
+    }});
+    row.append("div").attr("class", "leg-swatch").style("background", color(t));
+    var label = t.length > 25 ? t.substring(0, 25) + "…" : t;
+    row.append("div").attr("class", "leg-label").text(label).attr("title", t);
+}});
+
+// Title
+svg.append("text").attr("x", W/2).attr("y", 18).attr("text-anchor", "middle")
+    .style("font-size", "14px").style("font-weight", "bold").style("fill", "#333")
+    .text("Topic Clusters — UMAP Document Embeddings");
+svg.append("text").attr("x", W/2).attr("y", 32).attr("text-anchor", "middle")
+    .style("font-size", "10px").style("fill", "#888")
+    .text("Each dot is a message, colored by BERTopic cluster. Click legend to filter.");
+
+}} catch(e) {{
+    document.getElementById("container").innerHTML = "<pre style='color:red'>" + e.message + "\\n" + e.stack + "</pre>";
+}}
+</script></body></html>
+    """, width="100%", height="640px")
+    return (q2b_umap,)
+
+
+@app.cell
 def _(pd):
     import os as _os
 
-    if _os.path.exists('data/topics_df.csv'):
+    if _os.path.exists('data/topics_df.csv') and _os.path.exists('data/topic_keywords.csv'):
         topics_df = pd.read_csv('data/topics_df.csv', index_col=0)
-        print(f"Loaded cached topics matrix: {topics_df.shape}")
+        _kw_df = pd.read_csv('data/topic_keywords.csv')
+
+        # Build readable labels: "Topic_0" → "T0: reef, nemo, extraction"
+        topic_label_map = {}
+        for _, _row in _kw_df.iterrows():
+            _tid = int(_row['topic_id'])
+            _kws = str(_row['keywords']).split(', ')[:3]
+            _short = ', '.join(_kws)
+            topic_label_map[f"Topic_{_tid}"] = f"T{_tid}: {_short}"
+
+        # Rename columns
+        topics_df = topics_df.rename(columns=topic_label_map)
+        print(f"Loaded topics matrix: {topics_df.shape} with readable labels")
+    elif _os.path.exists('data/topics_df.csv'):
+        topics_df = pd.read_csv('data/topics_df.csv', index_col=0)
+        topic_label_map = {}
+        print(f"Loaded topics matrix: {topics_df.shape} (no keywords file, using raw labels)")
     else:
         raise FileNotFoundError(
             "data/topics_df.csv not found. "
             "Run 'python save_topic_cache.py' once to generate topic model cache."
         )
-    return (topics_df,)
+    return topic_label_map, topics_df
 
 
 
@@ -3143,24 +3284,23 @@ def _(alt, matrix_plot_df):
     )
 
     _ = topic_heatmap
-    return
+    return (topic_heatmap,)
 
 
 @app.cell
 def _(alt, community_topic_matrix):
-    community_topic_matrix_norm = community_topic_matrix.div(
+    _community_topic_matrix_norm = community_topic_matrix.div(
         community_topic_matrix.sum(axis=1), axis=0
     )
 
-    norm_matrix_plot_df = (
-        community_topic_matrix_norm
+    _norm_matrix_plot_df = (
+        _community_topic_matrix_norm
         .reset_index()
         .melt(id_vars="community", var_name="topic", value_name="score")
     )
 
-
     norm_topic_heatmap = (
-        alt.Chart(norm_matrix_plot_df)
+        alt.Chart(_norm_matrix_plot_df)
         .mark_rect()
         .encode(
             x=alt.X("topic:N", title="Topic"),
@@ -3171,12 +3311,12 @@ def _(alt, community_topic_matrix):
         .properties(
             width=500,
             height=300,
-            title="Topic Distribution per Community"
+            title="Topic Distribution per Community (Normalized)"
         )
     )
 
     _ = norm_topic_heatmap
-    return
+    return (norm_topic_heatmap,)
 
 
 @app.cell
@@ -3351,40 +3491,56 @@ def _(all_entities, entity_type_filter, pd):
 
 
 @app.cell
-def _(go, likely_pseudonyms, mo):
-    # Create a summary visualization of detected pseudonyms
-    _pseudo_summary = likely_pseudonyms[['label', 'sub_type', 'detected_patterns', 'pseudonym_score']].copy()
-    _pseudo_summary = _pseudo_summary.sort_values('pseudonym_score', ascending=True)
+def _(json_lib, likely_pseudonyms, mo):
+    _ps = likely_pseudonyms[['label', 'sub_type', 'detected_patterns', 'pseudonym_score']].copy()
+    _ps = _ps.sort_values('pseudonym_score', ascending=True)
+    _data = _ps.to_dict(orient='records')
+    _dj = json_lib.dumps(_data)
+    _n = len(_data)
 
-    fig_pseudo_bar = go.Figure()
-
-    _colors = {'Person': '#4ECDC4', 'Vessel': '#FF6B6B', 'Organization': '#95E1D3', 'Group': '#F38181'}
-
-    for _idx, _row in _pseudo_summary.iterrows():
-        fig_pseudo_bar.add_trace(go.Bar(
-            y=[_row['label']],
-            x=[_row['pseudonym_score']],
-            orientation='h',
-            marker_color='#FFD700',  # Gold for all pseudonyms
-            text=f"{_row['detected_patterns']}",
-            textposition='outside',
-            hovertemplate=f"<b>{_row['label']}</b><br>Type: {_row['sub_type']}<br>Pattern: {_row['detected_patterns']}<br>Score: {_row['pseudonym_score']}<extra></extra>",
-            showlegend=False
-        ))
-
-    fig_pseudo_bar.update_layout(
-        title=dict(text='<b>Visualization 1: Detected Pseudonyms by Pattern Score</b><br><sup>Higher score = more pseudonym indicators | All confirmed aliases shown in gold</sup>', x=0.5),
-        xaxis_title='Pseudonym Score (number of pattern matches)',
-        yaxis_title='Entity',
-        height=max(400, len(_pseudo_summary) * 35),
-        showlegend=False,
-        bargap=0.3
-    )
+    _bar_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head><script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:14px; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px; padding:8px 12px;
+  font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none; z-index:1000; max-width:300px; }}
+.bar:hover {{ opacity:.8; cursor:pointer; }}
+</style></head><body>
+<div id="container"><div id="chart"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var data={_dj}, tooltip=d3.select("#tooltip");
+var m={{top:10,right:120,bottom:30,left:140}}, barH=28, W=700;
+var H=data.length*barH+m.top+m.bottom;
+var svg=d3.select("#chart").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+var maxS=d3.max(data,function(d){{return d.pseudonym_score;}})||1;
+var x=d3.scaleLinear().domain([0,maxS+0.5]).range([0,W-m.left-m.right]);
+var y=d3.scaleBand().domain(data.map(function(d){{return d.label;}})).range([0,H-m.top-m.bottom]).padding(.15);
+g.selectAll("rect").data(data).enter().append("rect").attr("class","bar")
+  .attr("x",0).attr("y",function(d){{return y(d.label);}}).attr("height",y.bandwidth())
+  .attr("width",function(d){{return x(d.pseudonym_score);}}).attr("fill","#FFD700").attr("stroke","#B8860B").attr("stroke-width",1).attr("rx",3)
+  .on("mouseover",function(event,d){{ d3.select(this).attr("opacity",.8);
+    tooltip.style("display","block").html("<strong>"+d.label+"</strong><br/>Type: "+d.sub_type+"<br/>Patterns: "+d.detected_patterns+"<br/>Score: <b>"+d.pseudonym_score+"</b>")
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px"); }})
+  .on("mouseout",function(){{ d3.select(this).attr("opacity",1); tooltip.style("display","none"); }});
+g.selectAll(".lbl").data(data).enter().append("text").attr("x",-6)
+  .attr("y",function(d){{return y(d.label)+y.bandwidth()/2;}}).attr("dy",".35em").attr("text-anchor","end")
+  .style("font-size","11px").style("fill","#333").style("font-weight","bold").text(function(d){{return d.label;}});
+g.selectAll(".pat").data(data).enter().append("text")
+  .attr("x",function(d){{return x(d.pseudonym_score)+5;}}).attr("y",function(d){{return y(d.label)+y.bandwidth()/2;}})
+  .attr("dy",".35em").style("font-size","9px").style("fill","#888").text(function(d){{return d.detected_patterns;}});
+g.append("g").attr("transform","translate(0,"+(H-m.top-m.bottom)+")").call(d3.axisBottom(x).ticks(maxS));
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+    """, width="100%", height=f"{max(400, _n * 30 + 60)}px")
 
     q3_pseudonym_bar = mo.vstack([
         mo.md("### Visualization 1: Pseudonym Detection Results"),
-        mo.md(f"**Summary**: Detected **{len(likely_pseudonyms)}** entities with pseudonym-like naming patterns. The role-based naming convention ('The Lookout', 'The Accountant', etc.) suggests an **organized operational hierarchy**."),
-        fig_pseudo_bar
+        mo.md(f"**Summary**: Detected **{len(likely_pseudonyms)}** entities with pseudonym-like naming patterns."),
+        _bar_iframe
     ])
     return (q3_pseudonym_bar,)
 
@@ -3885,7 +4041,7 @@ def _(mo):
 def _(
     all_entities,
     entity_list,
-    go,
+    json_lib,
     leaves_list,
     likely_pseudonyms,
     linkage,
@@ -3896,68 +4052,83 @@ def _(
     similarity_matrix,
 ):
     _thresh = sim_threshold.value
+    _n_high = 0
 
     if len(entity_list) > 3:
-        # Filter to entities with some similarity
         _row_sums = similarity_matrix.sum(axis=1)
-        _active_mask = _row_sums > 0
-        _active_indices = np.where(_active_mask)[0]
+        _active_indices = np.where(_row_sums > 0)[0]
 
         if len(_active_indices) > 3:
             _sub_matrix = similarity_matrix[np.ix_(_active_indices, _active_indices)]
             _sub_entities = [entity_list[_i] for _i in _active_indices]
-            _sub_labels = [all_entities.get(_e, {}).get('label', _e)[:15] for _e in _sub_entities]
-
-            # Mark pseudonyms with ★
             _pseudonym_ids = set(likely_pseudonyms['entity_id'].tolist())
-            _sub_labels = [f"★{_l}" if _sub_entities[_i] in _pseudonym_ids else _l 
-                          for _i, _l in enumerate(_sub_labels)]
+            _sub_labels = [("★" if _sub_entities[_i] in _pseudonym_ids else "") +
+                           all_entities.get(_e, {}).get('label', _e)[:15]
+                           for _i, _e in enumerate(_sub_entities)]
 
-            # Hierarchical clustering
             _dist = pdist(_sub_matrix + 0.001)
             _linkage_mat = linkage(_dist, method='average')
             _order = leaves_list(_linkage_mat)
 
-            # Reorder matrix and labels
             _ordered_matrix = _sub_matrix[_order, :][:, _order]
             _ordered_labels = [_sub_labels[_i] for _i in _order]
+            _display = np.where(_ordered_matrix >= _thresh, _ordered_matrix, 0)
+            _n_high = int(np.sum(_ordered_matrix >= _thresh)) // 2
 
-            # Apply threshold masking for visualization
-            _display_matrix = np.where(_ordered_matrix >= _thresh, _ordered_matrix, 0)
+            _hm_data = []
+            for _i in range(len(_ordered_labels)):
+                for _j in range(len(_ordered_labels)):
+                    if _display[_i][_j] > 0:
+                        _hm_data.append({"x": _j, "y": _i, "v": round(float(_display[_i][_j]), 3)})
 
-            fig_heatmap = go.Figure(data=go.Heatmap(
-                z=_display_matrix,
-                x=_ordered_labels,
-                y=_ordered_labels,
-                colorscale='Viridis',
-                hovertemplate='<b>%{x}</b> ↔ <b>%{y}</b><br>Jaccard: %{z:.3f}<extra></extra>',
-                colorbar=dict(title=f'Jaccard<br>(≥{_thresh})')
-            ))
+            _labels_json = json_lib.dumps(_ordered_labels)
+            _data_json = json_lib.dumps(_hm_data)
+            _n = len(_ordered_labels)
 
-            fig_heatmap.update_layout(
-                title=dict(text=f'<b>Visualization 3: Entity Similarity Heatmap (threshold ≥ {_thresh})</b><br><sup>★ = Pseudonym | Bright = high similarity | Hierarchically clustered</sup>', x=0.5),
-                height=700, width=850,
-                xaxis=dict(tickangle=45, tickfont=dict(size=8)),
-                yaxis=dict(tickfont=dict(size=8), autorange='reversed')
-            )
-
-            # Count high-similarity pairs
-            _n_high = np.sum(_ordered_matrix >= _thresh) // 2
+            _hm_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head><script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:10px; overflow:auto; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px; padding:8px 12px;
+  font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none; z-index:1000; }}
+</style></head><body>
+<div id="container"><div id="chart"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var data={_data_json}, labels={_labels_json}, n={_n};
+var tooltip=d3.select("#tooltip");
+var cs=Math.max(10, Math.min(20, 600/n));
+var m={{top:10,right:20,bottom:100,left:100}};
+var W=n*cs+m.left+m.right, H=n*cs+m.top+m.bottom;
+var svg=d3.select("#chart").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+var color=d3.scaleSequential(d3.interpolateViridis).domain([0,d3.max(data,function(d){{return d.v;}})||1]);
+g.selectAll("rect").data(data).enter().append("rect")
+  .attr("x",function(d){{return d.x*cs;}}).attr("y",function(d){{return d.y*cs;}})
+  .attr("width",cs-1).attr("height",cs-1).attr("fill",function(d){{return color(d.v);}}).attr("rx",1)
+  .on("mouseover",function(event,d){{ d3.select(this).attr("stroke","#fff").attr("stroke-width",2);
+    tooltip.style("display","block").html("<b>"+labels[d.y]+"</b> ↔ <b>"+labels[d.x]+"</b><br/>Jaccard: <b>"+d.v.toFixed(3)+"</b>")
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px"); }})
+  .on("mouseout",function(){{ d3.select(this).attr("stroke","none"); tooltip.style("display","none"); }});
+var x=d3.scaleBand().domain(d3.range(n)).range([0,n*cs]);
+g.append("g").attr("transform","translate(0,"+n*cs+")").call(d3.axisBottom(x).tickFormat(function(i){{return labels[i];}}))
+  .selectAll("text").attr("transform","rotate(-45)").style("text-anchor","end").style("font-size","8px");
+g.append("g").call(d3.axisLeft(d3.scaleBand().domain(d3.range(n)).range([0,n*cs])).tickFormat(function(i){{return labels[i];}}))
+  .selectAll("text").style("font-size","8px");
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+            """, width="100%", height=f"{max(500, _n*20+180)}px")
         else:
-            fig_heatmap = go.Figure()
-            fig_heatmap.add_annotation(text="Insufficient similar entities for clustering", showarrow=False)
-            fig_heatmap.update_layout(height=300)
-            _n_high = 0
+            _hm_iframe = mo.md("*Insufficient similar entities for clustering*")
     else:
-        fig_heatmap = go.Figure()
-        fig_heatmap.add_annotation(text="Insufficient data for heatmap", showarrow=False)
-        fig_heatmap.update_layout(height=300)
-        _n_high = 0
+        _hm_iframe = mo.md("*Insufficient data for heatmap*")
 
     q3_sim_heatmap = mo.vstack([
         mo.md("### Visualization 3: Similarity Heatmap — Clustered by Communication Patterns"),
-        mo.md(f"**Insight**: Hierarchical clustering reveals {_n_high if '_n_high' in dir() else 0} entity pairs with similarity ≥ {_thresh}. Diagonal blocks indicate communities of entities that share communication partners."),
-        fig_heatmap
+        mo.md(f"**Insight**: Hierarchical clustering reveals {_n_high} entity pairs with similarity ≥ {_thresh}. Diagonal blocks indicate communities."),
+        _hm_iframe
     ])
     return (q3_sim_heatmap,)
 
@@ -3993,96 +4164,102 @@ def _(
     comm_records,
     datetime,
     entity_type_filter,
-    go,
+    json_lib,
     likely_pseudonyms,
     mo,
     np,
     pd,
 ):
-    # Build hourly activity matrix for all active entities
     _activity_data = []
-
     for _rec in comm_records:
-        _sender_type = all_entities.get(_rec['sender'], {}).get('sub_type', '')
-        _receiver_type = all_entities.get(_rec['receiver'], {}).get('sub_type', '')
-
-        if _sender_type in entity_type_filter.value or _receiver_type in entity_type_filter.value:
+        _st = all_entities.get(_rec['sender'], {}).get('sub_type', '')
+        _rt = all_entities.get(_rec['receiver'], {}).get('sub_type', '')
+        if _st in entity_type_filter.value or _rt in entity_type_filter.value:
             try:
                 _ts = datetime.fromisoformat(_rec['timestamp'].replace('Z', '+00:00'))
-                _hour = _ts.hour
-                if _sender_type in entity_type_filter.value:
-                    _activity_data.append({'entity': _rec['sender'], 'hour': _hour})
-                if _receiver_type in entity_type_filter.value:
-                    _activity_data.append({'entity': _rec['receiver'], 'hour': _hour})
-            except:
-                pass
+                _h = _ts.hour
+                if _st in entity_type_filter.value:
+                    _activity_data.append({'entity': _rec['sender'], 'hour': _h})
+                if _rt in entity_type_filter.value:
+                    _activity_data.append({'entity': _rec['receiver'], 'hour': _h})
+            except: pass
 
-    _activity_df = pd.DataFrame(_activity_data)
+    _adf = pd.DataFrame(_activity_data)
+    _n_pseudo_temporal = 0
 
-    if len(_activity_df) > 0:
-        _pivot = _activity_df.groupby(['entity', 'hour']).size().unstack(fill_value=0)
+    if len(_adf) > 0:
+        _pivot = _adf.groupby(['entity','hour']).size().unstack(fill_value=0)
+        _rsums = _pivot.sum(axis=1)
+        _active = _rsums[_rsums > 5].index.tolist()
 
-        # Normalize each row
-        _row_sums = _pivot.sum(axis=1)
-        _active_entities = _row_sums[_row_sums > 5].index.tolist()  # Filter low-activity
+        if len(_active) > 3:
+            _pf = _pivot.loc[_active]
+            _pn = _pf.div(_pf.max(axis=1), axis=0).fillna(0)
+            _pn = _pn.loc[_pf.sum(axis=1).sort_values(ascending=False).index]
+            _pid = set(likely_pseudonyms['entity_id'].tolist())
 
-        if len(_active_entities) > 3:
-            _pivot_filtered = _pivot.loc[_active_entities]
-            _pivot_norm = _pivot_filtered.div(_pivot_filtered.max(axis=1), axis=0).fillna(0)
-
-            # Sort by total activity
-            _pivot_norm = _pivot_norm.loc[_pivot_filtered.sum(axis=1).sort_values(ascending=False).index]
-
-            # Get labels with pseudonym markers
-            _pseudonym_ids = set(likely_pseudonyms['entity_id'].tolist())
             _labels = []
-            _n_pseudo_temporal = 0
-            for _eid in _pivot_norm.index:
-                _label = all_entities.get(_eid, {}).get('label', _eid)[:15]
-                if _eid in _pseudonym_ids:
-                    _label = f"★ {_label}"
+            for _eid in _pn.index:
+                _lbl = all_entities.get(_eid, {}).get('label', _eid)[:15]
+                if _eid in _pid:
+                    _lbl = "★ " + _lbl
                     _n_pseudo_temporal += 1
-                _labels.append(_label)
+                _labels.append(_lbl)
 
-            # Ensure all 24 hours
-            _hours = list(range(24))
-            _matrix = np.zeros((len(_pivot_norm), 24))
-            for _i, _eid in enumerate(_pivot_norm.index):
-                for _h in _pivot_norm.columns:
-                    if 0 <= _h < 24:
-                        _matrix[_i, _h] = _pivot_norm.loc[_eid, _h]
+            _cells = []
+            for _i, _eid in enumerate(_pn.index):
+                for _h in range(24):
+                    _v = float(_pn.loc[_eid, _h]) if _h in _pn.columns else 0
+                    if _v > 0:
+                        _cells.append({"y": _i, "x": _h, "v": round(_v, 3)})
 
-            fig_temporal = go.Figure(data=go.Heatmap(
-                z=_matrix,
-                x=[f"{_h:02d}:00" for _h in _hours],
-                y=_labels,
-                colorscale='YlOrRd',
-                hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Activity: %{z:.2f}<extra></extra>',
-                colorbar=dict(title='Normalized<br>Activity')
-            ))
+            _cj = json_lib.dumps(_cells)
+            _lj = json_lib.dumps(_labels)
+            _nl = len(_labels)
 
-            fig_temporal.update_layout(
-                title=dict(text='<b>Visualization 4: Temporal Activity Fingerprints</b><br><sup>★ = Pseudonym | Red = peak activity | Non-overlapping patterns suggest same person</sup>', x=0.5),
-                xaxis_title='Hour of Day',
-                yaxis_title='Entity',
-                height=max(400, len(_labels) * 20),
-                yaxis=dict(tickfont=dict(size=9))
-            )
+            _temp_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head><script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:10px; overflow:auto; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px; padding:8px 12px;
+  font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none; z-index:1000; }}
+</style></head><body>
+<div id="container"><div id="chart"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var data={_cj}, labels={_lj}, nL={_nl};
+var tooltip=d3.select("#tooltip");
+var cW=22, cH=18, m={{top:10,right:20,bottom:40,left:120}};
+var W=24*cW+m.left+m.right, H=nL*cH+m.top+m.bottom;
+var svg=d3.select("#chart").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+var color=d3.scaleSequential(d3.interpolateYlOrRd).domain([0,1]);
+g.selectAll("rect").data(data).enter().append("rect")
+  .attr("x",function(d){{return d.x*cW;}}).attr("y",function(d){{return d.y*cH;}})
+  .attr("width",cW-1).attr("height",cH-1).attr("fill",function(d){{return color(d.v);}}).attr("rx",1)
+  .on("mouseover",function(event,d){{ d3.select(this).attr("stroke","#333").attr("stroke-width",1.5);
+    tooltip.style("display","block").html("<b>"+labels[d.y]+"</b><br/>Hour: "+d.x+":00<br/>Activity: "+d.v.toFixed(2))
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px"); }})
+  .on("mouseout",function(){{ d3.select(this).attr("stroke","none"); tooltip.style("display","none"); }});
+var yS=d3.scaleBand().domain(d3.range(nL)).range([0,nL*cH]);
+g.append("g").call(d3.axisLeft(yS).tickFormat(function(i){{return labels[i];}})).selectAll("text").style("font-size","9px");
+var xS=d3.scaleBand().domain(d3.range(24)).range([0,24*cW]);
+g.append("g").attr("transform","translate(0,"+nL*cH+")").call(d3.axisBottom(xS).tickFormat(function(h){{return h+":00";}}))
+  .selectAll("text").style("font-size","8px").attr("transform","rotate(-40)").style("text-anchor","end");
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+            """, width="100%", height=f"{max(400, _nl*20+80)}px")
         else:
-            fig_temporal = go.Figure()
-            fig_temporal.add_annotation(text="Insufficient active entities", showarrow=False)
-            fig_temporal.update_layout(height=300)
-            _n_pseudo_temporal = 0
+            _temp_iframe = mo.md("*Insufficient active entities*")
     else:
-        fig_temporal = go.Figure()
-        fig_temporal.add_annotation(text="No temporal data available", showarrow=False)
-        fig_temporal.update_layout(height=300)
-        _n_pseudo_temporal = 0
+        _temp_iframe = mo.md("*No temporal data*")
 
     q3_temporal = mo.vstack([
         mo.md("### Visualization 4: Temporal Activity Matrix"),
-        mo.md(f"**Insight**: Activity concentrated between 08:00-14:00 (business hours). {_n_pseudo_temporal} pseudonyms visible (★). Look for complementary patterns pseudonyms active at different hours could be the same person."),
-        fig_temporal
+        mo.md(f"**Insight**: Activity concentrated between 08:00–14:00. {_n_pseudo_temporal} pseudonyms visible (★). Non-overlapping patterns suggest same person."),
+        _temp_iframe
     ])
     return (q3_temporal,)
 
@@ -4114,7 +4291,7 @@ def _(mo):
 @app.cell
 def _(
     all_entities,
-    go,
+    json_lib,
     likely_pseudonyms,
     mo,
     np,
@@ -4124,93 +4301,96 @@ def _(
     similarity_df,
 ):
     _thresh = sim_threshold.value
-    _pseudonym_ids = set(likely_pseudonyms['entity_id'].tolist())
+    _pid = set(likely_pseudonyms['entity_id'].tolist())
+    _tc = {"Person":"#4ECDC4","Vessel":"#FF6B6B","Organization":"#95E1D3","Group":"#F38181"}
 
     _G = nx.Graph()
-    _filtered = similarity_df[similarity_df['jaccard'] >= _thresh]
-
-    # Apply pseudonym-only filter if checked
+    _filt = similarity_df[similarity_df['jaccard'] >= _thresh]
     if show_pseudonyms_only.value:
-        _filtered = _filtered[
-            (_filtered['entity_a'].isin(_pseudonym_ids)) | 
-            (_filtered['entity_b'].isin(_pseudonym_ids))
-        ]
+        _filt = _filt[(_filt['entity_a'].isin(_pid)) | (_filt['entity_b'].isin(_pid))]
 
-    for _, _row in _filtered.iterrows():
-        _ea, _eb = _row['entity_a'], _row['entity_b']
-        _G.add_node(_ea, label=all_entities[_ea].get('label', _ea),
-                   sub_type=all_entities[_ea].get('sub_type', 'Unknown'))
-        _G.add_node(_eb, label=all_entities[_eb].get('label', _eb),
-                   sub_type=all_entities[_eb].get('sub_type', 'Unknown'))
-        _G.add_edge(_ea, _eb, weight=_row['jaccard'])
+    for _, _r in _filt.iterrows():
+        for _e in [_r['entity_a'], _r['entity_b']]:
+            _G.add_node(_e, label=all_entities[_e].get('label', _e), sub_type=all_entities[_e].get('sub_type','Unknown'))
+        _G.add_edge(_r['entity_a'], _r['entity_b'], weight=float(_r['jaccard']))
 
-    if len(_G.nodes) > 1:
-        _pos = nx.spring_layout(_G, k=2/np.sqrt(len(_G.nodes)+1), iterations=50, seed=42)
+    _n_comp = nx.number_connected_components(_G) if len(_G.nodes) > 0 else 0
+    _nn = len(_G.nodes)
+    _ne = len(_G.edges)
 
-        # Draw edges with width proportional to similarity
-        _edge_traces = []
-        for _e in _G.edges(data=True):
-            _x0, _y0 = _pos[_e[0]]
-            _x1, _y1 = _pos[_e[1]]
-            _weight = _e[2].get('weight', 0.5)
-            _edge_traces.append(go.Scatter(
-                x=[_x0, _x1, None], y=[_y0, _y1, None],
-                mode='lines',
-                line=dict(width=max(1, _weight * 5), color=f'rgba(150,150,150,{0.3 + _weight * 0.5})'),
-                hoverinfo='none',
-                showlegend=False
-            ))
+    if _nn > 1:
+        _nd = [{"id":n,"label":d.get("label",n),"sub_type":d.get("sub_type","Unknown"),
+                "isPseudo":n in _pid,"color":"#FFD700" if n in _pid else _tc.get(d.get("sub_type",""),"#999")}
+               for n,d in _G.nodes(data=True)]
+        _ed = [{"source":u,"target":v,"weight":round(d["weight"],3)} for u,v,d in _G.edges(data=True)]
+        _nj = json_lib.dumps(_nd)
+        _ej = json_lib.dumps(_ed)
 
-        # Draw nodes
-        _node_x, _node_y, _colors, _sizes, _texts, _hovers = [], [], [], [], [], []
-        _type_colors = {'Person': '#4ECDC4', 'Vessel': '#FF6B6B', 'Organization': '#95E1D3', 'Group': '#F38181'}
-
-        for _n in _G.nodes(data=True):
-            _x, _y = _pos[_n[0]]
-            _node_x.append(_x)
-            _node_y.append(_y)
-            _label = _n[1].get('label', _n[0])
-            _texts.append(_label)
-            _hovers.append(f"<b>{_label}</b><br>Type: {_n[1].get('sub_type', 'Unknown')}<br>Connections: {_G.degree(_n[0])}")
-
-            if _n[0] in _pseudonym_ids:
-                _colors.append('#FFD700')
-                _sizes.append(25)
-            else:
-                _colors.append(_type_colors.get(_n[1].get('sub_type', ''), '#999'))
-                _sizes.append(15)
-
-        fig_force = go.Figure()
-        for _trace in _edge_traces:
-            fig_force.add_trace(_trace)
-        fig_force.add_trace(go.Scatter(
-            x=_node_x, y=_node_y, mode='markers+text',
-            marker=dict(size=_sizes, color=_colors, line=dict(width=2, color='white')),
-            text=_texts, textposition='top center', textfont=dict(size=9),
-            hovertext=_hovers, hoverinfo='text'
-        ))
-
-        _n_pseudo_in_net = len([n for n in _G.nodes() if n in _pseudonym_ids])
-        _n_components = nx.number_connected_components(_G)
-
-        fig_force.update_layout(
-            title=dict(text=f'<b>Visualization 5: Similarity Network (threshold ≥ {_thresh:.2f})</b><br><sup>Nodes: {len(_G.nodes)} | Edges: {len(_G.edges)} | Components: {_n_components} | Gold = Pseudonym</sup>', x=0.5),
-            height=600, showlegend=False, hovermode='closest',
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            plot_bgcolor='#fafafa'
-        )
+        _force_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head><script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ width:100%; height:550px; background:white; border:1px solid #ddd; border-radius:6px; position:relative; overflow:hidden; }}
+#stats {{ position:absolute; top:8px; left:10px; font-size:11px; color:#666; background:rgba(255,255,255,.9);
+  padding:3px 8px; border-radius:4px; border:1px solid #eee; z-index:10; }}
+#hint {{ position:absolute; bottom:6px; left:10px; font-size:10px; color:#aaa; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px; padding:8px 12px;
+  font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none; z-index:1000; }}
+</style></head><body>
+<div id="container">
+  <div id="stats">{_nn} nodes &middot; {_ne} edges &middot; {_n_comp} components</div>
+  <div id="hint">Drag nodes &middot; Scroll to zoom &middot; Hover for details</div>
+</div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var nodes={_nj}, edges={_ej}, tooltip=d3.select("#tooltip");
+var el=document.getElementById("container"), W=el.offsetWidth||800, H=550;
+var svg=d3.select("#container").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g");
+svg.call(d3.zoom().scaleExtent([.2,5]).on("zoom",function(ev){{g.attr("transform",ev.transform);}}));
+var sim=d3.forceSimulation(nodes)
+  .force("link",d3.forceLink(edges).id(function(d){{return d.id;}}).distance(function(d){{return 120-d.weight*60;}}).strength(.4))
+  .force("charge",d3.forceManyBody().strength(-250))
+  .force("center",d3.forceCenter(W/2,H/2))
+  .force("collide",d3.forceCollide(20));
+var link=g.append("g").selectAll("line").data(edges).enter().append("line")
+  .attr("stroke","#bbb").attr("stroke-width",function(d){{return Math.max(1,d.weight*6);}}).attr("opacity",.35);
+var node=g.append("g").selectAll("g").data(nodes).enter().append("g").style("cursor","pointer")
+  .call(d3.drag().on("start",function(ev,d){{if(!ev.active)sim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;}})
+    .on("drag",function(ev,d){{d.fx=ev.x;d.fy=ev.y;}})
+    .on("end",function(ev,d){{if(!ev.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}}));
+node.append("circle").attr("r",function(d){{return d.isPseudo?12:8;}}).attr("fill",function(d){{return d.color;}})
+  .attr("stroke",function(d){{return d.isPseudo?"#B8860B":"#555";}}).attr("stroke-width",function(d){{return d.isPseudo?2.5:1.2;}});
+node.append("text").attr("dx",14).attr("dy",4).style("font-size","10px").style("fill","#333")
+  .text(function(d){{return d.label.length>18?d.label.substring(0,18)+"…":d.label;}});
+node.on("mouseover",function(event,d){{
+  link.attr("opacity",function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id||t===d.id)?.8:.04;}})
+    .attr("stroke",function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id||t===d.id)?"#555":"#bbb";}});
+  node.select("circle").attr("opacity",function(n){{if(n.id===d.id)return 1;
+    return edges.some(function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id&&t===n.id)||(t===d.id&&s===n.id);}})?1:.12;}});
+  node.select("text").attr("opacity",function(n){{if(n.id===d.id)return 1;
+    return edges.some(function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return(s===d.id&&t===n.id)||(t===d.id&&s===n.id);}})?1:.12;}});
+  var conns=edges.filter(function(l){{var s=l.source.id||l.source,t=l.target.id||l.target;return s===d.id||t===d.id;}});
+  tooltip.style("display","block").html("<strong>"+d.label+"</strong> "+(d.isPseudo?"★ Pseudonym":"")
+    +"<br/>"+d.sub_type+"<br/>"+conns.length+" connections")
+    .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px");
+}}).on("mouseout",function(){{link.attr("opacity",.35).attr("stroke","#bbb");node.select("circle").attr("opacity",1);node.select("text").attr("opacity",1);tooltip.style("display","none");}});
+sim.on("tick",function(){{
+  link.attr("x1",function(d){{return d.source.x;}}).attr("y1",function(d){{return d.source.y;}})
+    .attr("x2",function(d){{return d.target.x;}}).attr("y2",function(d){{return d.target.y;}});
+  node.attr("transform",function(d){{return "translate("+d.x+","+d.y+")";}});
+}});
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+        """, width="100%", height="570px")
     else:
-        fig_force = go.Figure()
-        fig_force.add_annotation(text=f"No entity pairs with similarity ≥ {_thresh:.2f}", showarrow=False)
-        fig_force.update_layout(height=300)
-        _n_pseudo_in_net = 0
-        _n_components = 0
+        _force_iframe = mo.md(f"*No entity pairs with similarity ≥ {_thresh:.2f}*")
 
     q3_force_network = mo.vstack([
         mo.md(f"### Visualization 5: Force-Directed Network (Threshold = {_thresh:.2f})"),
-        mo.md(f"**Insight**: At threshold {_thresh:.2f}, the network has **{len(_G.nodes) if '_G' in dir() and len(_G.nodes) > 0 else 0} entities** in **{_n_components} connected components**. Pseudonyms in the same component share communication partners."),
-        fig_force
+        mo.md(f"**Insight**: {_nn} entities in {_n_comp} components. Pseudonyms (gold, larger) in the same component share communication partners."),
+        _force_iframe
     ])
     return (q3_force_network,)
 
@@ -4237,25 +4417,24 @@ def _(mo):
 
 
 @app.cell
-def _(go, likely_pseudonyms, mo, sim_threshold, similarity_df):
+def _(likely_pseudonyms, mo, sim_threshold, similarity_df):
+    import plotly.graph_objects as _go
+
     _thresh = sim_threshold.value
     _pseudonym_ids = set(likely_pseudonyms['entity_id'].tolist())
     _flows = []
 
-    # Filter by threshold
     _filtered_sim = similarity_df[similarity_df['jaccard'] >= _thresh]
 
     for _, _row in _filtered_sim.head(50).iterrows():
         _is_pa = _row['entity_a'] in _pseudonym_ids
         _is_pb = _row['entity_b'] in _pseudonym_ids
 
-        # We want flows FROM pseudonym TO candidate
         if _is_pa and not _is_pb:
             _flows.append({'source': _row['label_a'], 'target': _row['label_b'] + ' ', 'value': _row['jaccard']})
         elif _is_pb and not _is_pa:
             _flows.append({'source': _row['label_b'], 'target': _row['label_a'] + ' ', 'value': _row['jaccard']})
         elif _is_pa and _is_pb:
-            # Both are pseudonyms - show connection (may be same person with two aliases)
             _flows.append({'source': _row['label_a'], 'target': _row['label_b'] + ' (alias?)', 'value': _row['jaccard']})
 
     if _flows:
@@ -4263,7 +4442,7 @@ def _(go, likely_pseudonyms, mo, sim_threshold, similarity_df):
         _node_idx = {_n: _i for _i, _n in enumerate(_nodes)}
         _node_colors = ['#FFD700' if not _n.endswith(' ') and 'alias' not in _n else '#4ECDC4' for _n in _nodes]
 
-        fig_sankey = go.Figure(go.Sankey(
+        _fig_sankey = _go.Figure(_go.Sankey(
             node=dict(
                 pad=15, thickness=20,
                 line=dict(color='white', width=1),
@@ -4282,21 +4461,28 @@ def _(go, likely_pseudonyms, mo, sim_threshold, similarity_df):
         _n_pseudo_sankey = len(set([_f['source'] for _f in _flows]))
         _n_candidates = len(set([_f['target'] for _f in _flows]))
 
-        fig_sankey.update_layout(
-            title=dict(text=f'<b>Visualization 6: Pseudonym Resolution Candidates (threshold ≥ {_thresh})</b><br><sup>Gold = Pseudonyms | Teal = Candidates | Flow width ∝ similarity</sup>', x=0.5),
-            height=500, font=dict(size=10)
+        _ = _fig_sankey.update_layout(
+            title=dict(
+                text=f'<b>Pseudonym Resolution Candidates (threshold ≥ {_thresh})</b><br>'
+                     f'<sup>Gold = Pseudonyms | Teal = Candidates | Flow width ∝ similarity</sup>',
+                x=0.5, font=dict(family='Segoe UI, sans-serif')
+            ),
+            height=max(450, len(_nodes) * 22),
+            font=dict(size=11, family='Segoe UI, sans-serif'),
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            margin=dict(l=10, r=10, t=60, b=10),
         )
     else:
-        fig_sankey = go.Figure()
-        fig_sankey.add_annotation(text=f"No resolution candidates at threshold ≥ {_thresh}", showarrow=False)
-        fig_sankey.update_layout(height=300)
+        _fig_sankey = mo.md(f"*No resolution candidates at threshold ≥ {_thresh:.2f}*")
         _n_pseudo_sankey = 0
         _n_candidates = 0
 
     q3_sankey = mo.vstack([
-        mo.md("### Visualization 6: Sankey Diagram: Entity Resolution Flow"),
-        mo.md(f"**Insight**: At threshold {_thresh:.2f}, **{_n_pseudo_sankey if '_n_pseudo_sankey' in dir() else 0} pseudonyms** connect to **{_n_candidates if '_n_candidates' in dir() else 0} candidate identities**. Wider flows indicate stronger evidence of identity match."),
-        fig_sankey
+        mo.md("### Visualization 6: Sankey Diagram — Entity Resolution Flow"),
+        mo.md(f"**Insight**: At threshold {_thresh:.2f}, **{_n_pseudo_sankey} pseudonyms** connect to "
+              f"**{_n_candidates} candidate identities**. Wider flows = stronger evidence of identity match."),
+        _fig_sankey
     ])
     return (q3_sankey,)
 
@@ -4332,92 +4518,99 @@ def _(
     datetime,
     entity_partners,
     entity_type_filter,
-    go,
+    json_lib,
     mo,
     pd,
     pseudonym_df,
     q3_comm_matrix,
 ):
-    _entity_features = []
-
+    _features = []
     for _, _row in pseudonym_df.iterrows():
         if _row['sub_type'] not in entity_type_filter.value:
             continue
-
         _eid = _row['entity_id']
         _sent = sum(q3_comm_matrix.get(_eid, {}).values())
-        _received = sum(1 for _r in comm_records if _r['receiver'] == _eid)
+        _recv = sum(1 for _r in comm_records if _r['receiver'] == _eid)
         _partners = len(entity_partners.get(_eid, set()))
-
-        # Compute activity hours
         _hours = set()
         for _r in comm_records:
             if _r['sender'] == _eid or _r['receiver'] == _eid:
                 try:
                     _ts = datetime.fromisoformat(_r['timestamp'].replace('Z', '+00:00'))
                     _hours.add(_ts.hour)
-                except:
-                    pass
-
-        if _sent + _received > 0:  # Only include active entities
-            _entity_features.append({
-                'label': _row['label'],
-                'entity_type': _row['sub_type'],
-                'pseudonym_score': _row['pseudonym_score'],
-                'messages_sent': _sent,
-                'messages_received': _received,
-                'unique_partners': _partners,
-                'active_hours': len(_hours),
-                'is_pseudonym': 1 if _row['is_likely_pseudonym'] else 0
+                except: pass
+        if _sent + _recv > 0:
+            _tm = {'Person':0,'Vessel':1,'Organization':2,'Group':3}
+            _features.append({
+                'label': _row['label'], 'type': _row['sub_type'],
+                'typeCode': _tm.get(_row['sub_type'], 4),
+                'pseudoScore': int(_row['pseudonym_score']),
+                'sent': _sent, 'received': _recv,
+                'partners': _partners, 'hours': len(_hours),
+                'isPseudo': bool(_row['is_likely_pseudonym'])
             })
 
-    _features_df = pd.DataFrame(_entity_features)
+    _n_active = len(_features)
+    _n_pseudo_pc = sum(1 for f in _features if f['isPseudo'])
 
-    if len(_features_df) > 0:
-        # Map entity type to numeric
-        _type_map = {'Person': 0, 'Vessel': 1, 'Organization': 2, 'Group': 3}
-        _features_df['type_code'] = _features_df['entity_type'].map(_type_map).fillna(4)
-
-        fig_parallel = go.Figure(data=go.Parcoords(
-            line=dict(
-                color=_features_df['is_pseudonym'],
-                colorscale=[[0, '#4ECDC4'], [1, '#FFD700']],
-                showscale=True,
-                colorbar=dict(title='Pseudonym', tickvals=[0, 1], ticktext=['No', 'Yes'])
-            ),
-            dimensions=[
-                dict(range=[0, 3], label='Entity Type', values=_features_df['type_code'],
-                     tickvals=[0, 1, 2, 3], ticktext=['Person', 'Vessel', 'Org', 'Group']),
-                dict(range=[0, max(1, _features_df['pseudonym_score'].max())], label='Pseudonym<br>Score',
-                     values=_features_df['pseudonym_score']),
-                dict(range=[0, max(1, _features_df['messages_sent'].max())], label='Msgs<br>Sent',
-                     values=_features_df['messages_sent']),
-                dict(range=[0, max(1, _features_df['messages_received'].max())], label='Msgs<br>Received',
-                     values=_features_df['messages_received']),
-                dict(range=[0, max(1, _features_df['unique_partners'].max())], label='Unique<br>Partners',
-                     values=_features_df['unique_partners']),
-                dict(range=[0, 24], label='Active<br>Hours', values=_features_df['active_hours'])
-            ]
-        ))
-
-        _n_active = len(_features_df)
-        _n_pseudo_pc = len(_features_df[_features_df['is_pseudonym'] == 1])
-
-        fig_parallel.update_layout(
-            title=dict(text='<b>Visualization 7: Parallel Coordinates — Multi-Dimensional Entity Comparison</b><br><sup>Each line = one entity | Gold = Pseudonym | Drag on axes to filter</sup>', x=0.5),
-            height=500, margin=dict(l=100, r=100)
-        )
+    if _features:
+        _fj = json_lib.dumps(_features)
+        _par_iframe = mo.iframe(f"""
+<!DOCTYPE html><html><head><script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* {{ box-sizing:border-box; }} body {{ margin:0; font-family:'Segoe UI',sans-serif; background:#fafafa; }}
+#container {{ background:white; border:1px solid #ddd; border-radius:6px; padding:14px; overflow:auto; }}
+.tooltip {{ position:fixed; background:white; border:1px solid #ccc; border-radius:6px; padding:8px 12px;
+  font-size:12px; pointer-events:none; box-shadow:2px 2px 6px rgba(0,0,0,.15); display:none; z-index:1000; }}
+path.entity-line {{ fill:none; stroke-width:1.5; opacity:.5; cursor:pointer; }}
+path.entity-line:hover {{ stroke-width:3; opacity:1; }}
+.axis-label {{ font-size:10px; fill:#444; font-weight:bold; }}
+</style></head><body>
+<div id="container"><div id="chart"></div></div>
+<div class="tooltip" id="tooltip"></div>
+<script>
+try {{
+var data={_fj}, tooltip=d3.select("#tooltip");
+var dims=["typeCode","pseudoScore","sent","received","partners","hours"];
+var dimLabels={{"typeCode":"Entity Type","pseudoScore":"Pseudonym Score","sent":"Messages Sent","received":"Messages Received","partners":"Unique Partners","hours":"Active Hours"}};
+var m={{top:30,right:40,bottom:10,left:40}}, W=800, H=420;
+var plotW=W-m.left-m.right, plotH=H-m.top-m.bottom;
+var svg=d3.select("#chart").append("svg").attr("width",W).attr("height",H);
+var g=svg.append("g").attr("transform","translate("+m.left+","+m.top+")");
+var yScales={{}};
+dims.forEach(function(d){{
+  var ext=d3.extent(data,function(r){{return r[d];}});
+  if(d==="typeCode") yScales[d]=d3.scalePoint().domain([0,1,2,3]).range([plotH,0]);
+  else yScales[d]=d3.scaleLinear().domain([ext[0],Math.max(ext[1],1)]).range([plotH,0]);
+}});
+var xScale=d3.scalePoint().domain(dims).range([0,plotW]).padding(.1);
+var line=d3.line().defined(function(d){{return !isNaN(d[1]);}});
+g.selectAll("path.entity-line").data(data).enter().append("path").attr("class","entity-line")
+  .attr("d",function(d){{return line(dims.map(function(dim){{return [xScale(dim),yScales[dim](d[dim])];}}))}})
+  .attr("stroke",function(d){{return d.isPseudo?"#FFD700":"#4ECDC4";}})
+  .attr("opacity",function(d){{return d.isPseudo?.7:.35;}})
+  .on("mouseover",function(event,d){{ d3.select(this).attr("stroke-width",3.5).attr("opacity",1);
+    tooltip.style("display","block").html("<b>"+d.label+"</b> ("+(d.isPseudo?"★ Pseudonym":"Real name")+")"
+      +"<br/>Type: "+d.type+"<br/>Sent: "+d.sent+" | Received: "+d.received+"<br/>Partners: "+d.partners+" | Hours: "+d.hours)
+      .style("left",(event.clientX+14)+"px").style("top",(event.clientY-20)+"px"); }})
+  .on("mouseout",function(event,d){{ d3.select(this).attr("stroke-width",1.5).attr("opacity",d.isPseudo?.7:.35); tooltip.style("display","none"); }});
+dims.forEach(function(dim){{
+  var axG=g.append("g").attr("transform","translate("+xScale(dim)+",0)");
+  if(dim==="typeCode") axG.call(d3.axisLeft(yScales[dim]).tickFormat(function(v){{return ["Person","Vessel","Org","Group"][v]||"";}}));
+  else axG.call(d3.axisLeft(yScales[dim]).ticks(5));
+  axG.selectAll("text").style("font-size","8px");
+  axG.append("text").attr("class","axis-label").attr("y",-12).attr("text-anchor","middle").text(dimLabels[dim]);
+}});
+}} catch(e){{ document.getElementById("container").innerHTML="<pre style='color:red'>"+e.message+"</pre>"; }}
+</script></body></html>
+        """, width="100%", height="460px")
     else:
-        fig_parallel = go.Figure()
-        fig_parallel.add_annotation(text="No entity data available", showarrow=False)
-        fig_parallel.update_layout(height=300)
-        _n_active = 0
-        _n_pseudo_pc = 0
+        _par_iframe = mo.md("*No entity data available*")
 
     q3_parallel = mo.vstack([
-        mo.md("### Visualization 7: Parallel Coordinates: Multi-Dimensional Entity Analysis"),
-        mo.md(f"**Insight**: Comparing **{_n_active if '_n_active' in dir() else 0} active entities** across 6 dimensions. **{_n_pseudo_pc if '_n_pseudo_pc' in dir() else 0} pseudonyms** (gold) can be filtered by dragging on any axis."),
-        fig_parallel
+        mo.md("### Visualization 7: Parallel Coordinates — Multi-Dimensional Entity Comparison"),
+        mo.md(f"**Insight**: Comparing {_n_active} active entities across 6 dimensions. {_n_pseudo_pc} pseudonyms (gold). Hover lines to identify entities."),
+        _par_iframe
     ])
     return (q3_parallel,)
 
