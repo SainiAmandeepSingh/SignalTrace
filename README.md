@@ -25,7 +25,7 @@ All pre-computed data files (LLM classifications, topic model cache) are already
 ## Run
 
 ```bash
-marimo run combined_app.py
+marimo run combined_app_final.py
 ```
 
 The dashboard opens in your browser. Use the top-level tabs to navigate between questions.
